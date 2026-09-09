@@ -452,7 +452,8 @@ def _resolve_min_chars(exchanges: list[Exchange], min_chars_flag: int | None) ->
 def _ask_run_distill_now(distill_count: int) -> bool:
     """蒸留を今すぐ実行するか聞く。y/n/1/2 を受け付ける。"""
     typer.echo(
-        f"\nStart distillation now? ({distill_count} exchanges, uses claude --print)"
+        f"\nStart distillation now? ({distill_count} exchanges, "
+        "uses an LLM and may consume tokens)"
     )
     typer.echo("  [1] No — distill on next session start (default)")
     typer.echo("  [2] Yes — run now")
@@ -557,8 +558,8 @@ def _resolve_skip_count(
     # 対話プロンプト
     typer.echo(
         f"\nFound {total} existing exchanges from past sessions.\n"
-        "Distillation uses an LLM "
-        "(Claude Haiku by default, or a local model if configured) "
+        "Distillation uses an LLM — Claude by default, or Codex/Gemini/Grok/"
+        "OpenCode/Oh My Pi/a local model if you pick one next — "
         "and may consume tokens.\n"
         "⚠ Skipped exchanges cannot be distilled later.\n"
     )

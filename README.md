@@ -57,7 +57,7 @@ loci init
 When running `loci init`, if past session logs are detected, you'll be prompted with:
 
 > [!IMPORTANT]
-> When adopting this tool mid-project, a large number of exchanges may already exist. Distilling all of them will consume significant `claude --print` (Haiku) tokens. We recommend starting with `Skip all` or `Distill last 50`.
+> When adopting this tool mid-project, a large number of exchanges may already exist. Distilling all of them consumes real tokens against whichever distill client you choose (Claude Haiku by default — see step 4 below for the other options). We recommend starting with `Skip all` or `Distill last 50`.
 
 1. **Min chars threshold** — Minimum character filter applied at index time (default: 50). Shorter exchanges are skipped entirely, which also shrinks the pool of distillation candidates. Higher values exclude short conversations and reduce token usage; lower values include nearly everything. (Distillation applies a separate `min_chars` of 100 — see [Configuration](#configuration).)
 2. **Handling existing exchanges** — Choose how much past history to distill:
