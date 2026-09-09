@@ -1,18 +1,12 @@
-<p align="center">
-  <img src="assets/banner.svg" alt="lociaction — two commands, recall everything: a minimal memory layer for AI coding agents" width="100%">
-</p>
+# lociaction
 
 <p align="center">
-  <a href="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/lociaction/"><img src="https://img.shields.io/pypi/v/lociaction" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
 <p align="center">English · <a href="README.ja.md">日本語</a></p>
-
-<p align="center">
-  <img src="assets/demo-search.svg" alt="loci search recalling a past design decision with its symbol, file:line, and git branch" width="640">
-</p>
 
 An AI coding agent recalls everything it has done through just two commands: `loci search` and `loci context`. That's the whole interface. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
 
@@ -31,17 +25,9 @@ The whole recall interface is two commands:
 
 That's deliberate. The user here is the agent, and an agent handed a 50-tool palette hesitates, mis-picks, and burns tokens just deciding which to call. With a surface this small — and no MCP tool schemas sitting resident in the context window — the agent reaches for the right call the first time, every time. *(When the full transcript is needed, `loci show "<exchange-id>"` expands a search result to its stored verbatim source.)*
 
-Touching a symbol means recalling what was decided about it — `loci context` reverse-looks-up the exact code location, signature, and the conversation behind it:
-
-<p align="center">
-  <img src="assets/demo-context.svg" alt="loci context reverse-looking-up a symbol to the conversation that shaped it" width="640">
-</p>
+Touching a symbol means recalling what was decided about it — `loci context` reverse-looks-up the exact code location, signature, and the conversation behind it.
 
 ## How It Works
-
-<p align="center">
-  <img src="assets/how-it-works.svg" alt="session logs are indexed into exchanges, distilled into palace objects with symbols, then recalled via BM25 + HNSW fused by RRF" width="100%">
-</p>
 
 1. **Index** — Splits agent session logs into exchanges (user utterance + agent response pairs) and indexes them with FTS5 for keyword search
 2. **Distill** — An LLM (`claude --print`, default `claude-haiku-4-5`) summarizes each exchange into a palace object: `exchange_core` (what was done), `specific_context` (concrete details), `room_assignments` (topic tags). tree-sitter resolves touched files to symbol level (function/class/method + file + line + signature)

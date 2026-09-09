@@ -1,18 +1,12 @@
-<p align="center">
-  <img src="assets/banner.svg" alt="lociaction — 2コマンドですべてを recall: AIコーディングエージェントのためのミニマルな記憶レイヤー" width="100%">
-</p>
+# lociaction
 
 <p align="center">
-  <a href="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/lociaction/"><img src="https://img.shields.io/pypi/v/lociaction" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · 日本語</p>
-
-<p align="center">
-  <img src="assets/demo-search.svg" alt="loci search が過去の設計判断を symbol・file:line・git ブランチ付きで想起する様子" width="640">
-</p>
 
 AI コーディングエージェントは、自分がやってきたことを 2 つのコマンド — `loci search` と `loci context` — だけで思い出せます。インターフェースはこれだけ。エージェントは迷うことなく適切な呼び出しを選び、過去の意思決定・会話・正確なコード位置を 0.2 秒以内に復元します。
 
@@ -26,22 +20,14 @@ CLI コマンド `loci` は**エージェント自身が呼び出す**ことを�
 
 - **`loci search "クエリ"`** — 過去の会話をセマンティック検索
 - **`loci context`** — 逆引き。コードシンボル（`--symbol "名前"`）または git ブランチ（`--branch "名前"`）から
-  - tree-sitter のシンボル解決（Python / TypeScript / Go）により、エージェントは編集前に実装意図を把握できる
+  - tree-sitter のシンボル解決（Python / TypeScript / Go / Rust / Java / C# / Ruby）により、エージェントは編集前に実装意図を把握できる
   - `--branch "名前"` は特定の git ブランチで何をしたか・議論したかを想起（`loci search "クエリ" --branch "名前"` でも可）
 
 これは意図的な設計です。ここでの利用者はエージェント自身であり、50 個のツールを渡されたエージェントは迷い、選び間違え、どれを呼ぶか決めるだけでトークンを消費します。表面がこれだけ小さく — かつ MCP のツール定義がコンテキストウィンドウに常駐しない — ので、エージェントは毎回・最初から正しい呼び出しに手を伸ばします。*(会話原文が必要なときは `loci show "<exchange-id>"` で検索結果の原文を取り出せます。)*
 
-シンボルに触れることは、それについて決めたことを想起すること — `loci context` は正確なコード位置・シグネチャと、その背後にある会話を逆引きします:
-
-<p align="center">
-  <img src="assets/demo-context.svg" alt="loci context がシンボルからそれを形作った会話へ逆引きする様子" width="640">
-</p>
+シンボルに触れることは、それについて決めたことを想起すること — `loci context` は正確なコード位置・シグネチャと、その背後にある会話を逆引きします。
 
 ## 仕組み
-
-<p align="center">
-  <img src="assets/how-it-works.svg" alt="セッションログを exchange にインデックスし、シンボル付きの palace object に蒸留、BM25 + HNSW を RRF で融合して想起する流れ" width="100%">
-</p>
 
 1. **Index** — エージェントのセッションログを exchange（ユーザー発話 + エージェント応答のペア）に分割し、FTS5 でキーワード検索可能にする
 2. **Distill** — LLM（`claude --print`、デフォルトは `claude-haiku-4-5`）が各 exchange を palace object に要約: `exchange_core`（何をしたか）、`specific_context`（具体的な詳細）、`room_assignments`（トピックタグ）。tree-sitter で触れたファイルをシンボルレベル（関数・クラス・メソッド + ファイル + 行 + シグネチャ）に解決
