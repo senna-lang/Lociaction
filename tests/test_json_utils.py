@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from codeatrium.json_utils import extract_json
+from lociaction.json_utils import extract_json
 
 _PALACE = {
     "exchange_core": "core",

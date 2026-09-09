@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import index_file, parse_omp_pi_exchanges
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import index_file, parse_omp_pi_exchanges
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "omp_pi.jsonl"
 
@@ -46,7 +46,7 @@ def test_index_file_records_omp_pi_touches_for_relative_paths(tmp_path: Path) ->
 
     session = tmp_path / "session.jsonl"
     _write_session(session, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_file(
@@ -88,7 +88,7 @@ def test_index_file_records_omp_pi_move_as_file_rename(tmp_path: Path) -> None:
     (project_root / "src" / "core").mkdir(parents=True)
     session = tmp_path / "session.jsonl"
     _write_session(session, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     index_file(
@@ -107,7 +107,7 @@ def test_index_file_omp_pi_is_incremental(tmp_path: Path) -> None:
     """同じセッションを再実行しても exchange を重複登録しない。"""
     session = tmp_path / "session.jsonl"
     _write_session(session, tmp_path)
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     assert index_file(session, db_path, min_chars=1, harness="omp-pi") == 2
@@ -132,7 +132,7 @@ def test_index_file_omp_pi_finds_cwd_after_placeholder_truncation(
     lines = original.splitlines(keepends=True)
     # 2ターン目のユーザー発話（index 11）の手前までを先に取り込む
     session.write_text("".join(lines[:11]))
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
     assert (
         index_file(

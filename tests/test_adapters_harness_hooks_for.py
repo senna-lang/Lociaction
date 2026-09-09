@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from codeatrium.adapters.harness.hooks import (
+from lociaction.adapters.harness.hooks import (
     ClaudeHooks,
     CodexHooks,
     FallbackHooks,
@@ -61,4 +61,4 @@ def test_fallback_hooks_uninstall_always_returns_false() -> None:
     changed, message = fallback.uninstall()
 
     assert changed is False
-    assert "no native codeatrium hooks" in message
+    assert "no native lociaction hooks" in message

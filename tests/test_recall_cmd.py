@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection, init_db
-from codeatrium.models import FusedResult
+from lociaction.cli import app
+from lociaction.db import get_connection, init_db
+from lociaction.models import FusedResult
 
 runner = CliRunner()
 
@@ -30,13 +30,13 @@ def _stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     """recall は search_combined を呼ぶため、モデルロードを避ける。"""
     mock = MagicMock()
     mock.embed.return_value = np.zeros(384, dtype=np.float32)
-    monkeypatch.setattr("codeatrium.embedder.Embedder", lambda: mock)
+    monkeypatch.setattr("lociaction.embedder.Embedder", lambda: mock)
 
 
 def _setup(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir()
-    db = codeatrium_dir / "memory.db"
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    db = lociaction_dir / "memory.db"
     init_db(db)
     return db, get_connection(db)
 
@@ -253,7 +253,7 @@ def test_recall_no_file_or_branch_exits_1(tmp_path, monkeypatch):
 
 def test_recency_decay_reorders_tied_relevance():
     """同一 RRF スコアなら、新しい timestamp の exchange が上に来る。"""
-    from codeatrium.search import apply_recency_decay
+    from lociaction.search import apply_recency_decay
 
     def hit(eid: str) -> FusedResult:
         return FusedResult(
@@ -279,7 +279,7 @@ def test_recency_decay_reorders_tied_relevance():
 
 def test_search_combined_recency_reorders_tied_bm25(tmp_path: Path) -> None:
     """同じ本文（同一 BM25 関連度）でも recency_half_life_days を渡すと新しい方が先。"""
-    from codeatrium.search import search_combined
+    from lociaction.search import search_combined
 
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -338,7 +338,7 @@ def test_search_combined_recency_reorders_tied_bm25(tmp_path: Path) -> None:
 
 def test_search_combined_default_does_not_require_recency(tmp_path: Path) -> None:
     """既存 search()/context() 呼び出しは recency 引数なしで動く。"""
-    from codeatrium.search import search_combined
+    from lociaction.search import search_combined
 
     db_path = tmp_path / "memory.db"
     init_db(db_path)

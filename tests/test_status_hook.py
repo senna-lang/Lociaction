@@ -14,8 +14,8 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import init_db
+from lociaction.cli import app
+from lociaction.db import init_db
 
 runner = CliRunner()
 
@@ -24,10 +24,10 @@ runner = CliRunner()
 
 
 def _setup_db(tmp_path: Path) -> Path:
-    """テスト用 DB を初期化して codeatrium ディレクトリを作成する"""
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir()
-    db = codeatrium_dir / "memory.db"
+    """テスト用 DB を初期化して lociaction ディレクトリを作成する"""
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    db = lociaction_dir / "memory.db"
     init_db(db)
     return db
 
@@ -63,7 +63,7 @@ def test_status_closes_connection_when_query_fails(tmp_path, monkeypatch):
     _setup_db(tmp_path)
     failing_connection = FailingConnection()
     monkeypatch.setattr(
-        "codeatrium.db.get_connection", lambda _db: failing_connection
+        "lociaction.db.get_connection", lambda _db: failing_connection
     )
 
     result = runner.invoke(app, ["status"])
@@ -132,12 +132,12 @@ def test_status_shows_unconfigured_distill(tmp_path, monkeypatch):
 
 def test_status_does_not_probe_distill_client_without_check(tmp_path, monkeypatch):
     _setup_db(tmp_path)
-    (tmp_path / ".codeatrium" / "config.toml").write_text(
+    (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nclient = "claude-cli"\n'
     )
     monkeypatch.chdir(tmp_path)
 
-    with patch("codeatrium.adapters.model.registry.check_ready") as check_ready:
+    with patch("lociaction.adapters.model.registry.check_ready") as check_ready:
         result = runner.invoke(app, ["status", "--json"])
 
     assert result.exit_code == 0
@@ -148,15 +148,15 @@ def test_status_does_not_probe_distill_client_without_check(tmp_path, monkeypatc
 
 def test_status_shows_ready_distill_client(tmp_path, monkeypatch):
     _setup_db(tmp_path)
-    (tmp_path / ".codeatrium" / "config.toml").write_text(
+    (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nclient = "claude-cli"\n'
     )
     monkeypatch.chdir(tmp_path)
 
-    from codeatrium.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
 
     monkeypatch.setattr(
-        "codeatrium.adapters.model.registry.check_ready",
+        "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
             id="claude-cli",
             label="Claude CLI",
@@ -185,7 +185,7 @@ def test_status_surfaces_broken_config_toml(tmp_path, monkeypatch):
     hook のバックグラウンド実行時（stderr は /dev/null に捨てられる）は
     気づけなかった）"""
     _setup_db(tmp_path)
-    (tmp_path / ".codeatrium" / "config.toml").write_text("not valid toml [[[")
+    (tmp_path / ".lociaction" / "config.toml").write_text("not valid toml [[[")
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["status", "--json"])
@@ -225,7 +225,7 @@ def test_status_surfaces_last_distill_error_in_json_and_text(tmp_path, monkeypat
     """meta に残した直近の distill 失敗を status の JSON / テキストに出す。"""
     db = _setup_db(tmp_path)
     monkeypatch.chdir(tmp_path)
-    from codeatrium.db import record_last_distill_error
+    from lociaction.db import record_last_distill_error
 
     record_last_distill_error(
         db,
@@ -252,7 +252,7 @@ def test_status_surfaces_last_distill_error_in_json_and_text(tmp_path, monkeypat
 
 def test_hook_install_creates_settings(tmp_path, monkeypatch):
     settings_path = tmp_path / ".claude" / "settings.json"
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     result = runner.invoke(app, ["hook", "install"])
     assert result.exit_code == 0
     assert settings_path.exists()
@@ -262,9 +262,9 @@ def test_hook_install_creates_settings(tmp_path, monkeypatch):
 
 def test_hook_install_omp_pi_writes_dedicated_extension_file(tmp_path, monkeypatch):
     """omp-pi は FallbackHooks ではなく ~/.omp/agent/extensions/*.ts へ実際に書く（issue #40）"""
-    ext_path = tmp_path / ".omp" / "agent" / "extensions" / "codeatrium.ts"
+    ext_path = tmp_path / ".omp" / "agent" / "extensions" / "lociaction.ts"
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.hooks.Path.home", lambda: tmp_path
+        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
     )
 
     result = runner.invoke(app, ["hook", "install", "--harness", "omp-pi"])
@@ -272,7 +272,7 @@ def test_hook_install_omp_pi_writes_dedicated_extension_file(tmp_path, monkeypat
     assert result.exit_code == 0
     assert ext_path.exists()
     content = ext_path.read_text()
-    assert "CODEATRIUM_HOOK_MARKER" in content
+    assert "LOCIACTION_HOOK_MARKER" in content
     assert "loci index --harness omp-pi" in content
     assert "agent_end" in content
     assert "session_start" in content
@@ -288,21 +288,21 @@ def test_hook_uninstall_omp_pi_removes_only_marker_owned_file(tmp_path, monkeypa
     other_file = ext_dir / "other-tool.ts"
     other_file.write_text("// not ours\n")
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.hooks.Path.home", lambda: tmp_path
+        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
     )
 
     runner.invoke(app, ["hook", "install", "--harness", "omp-pi"])
     result = runner.invoke(app, ["hook", "uninstall", "--harness", "omp-pi"])
 
     assert result.exit_code == 0
-    assert not (ext_dir / "codeatrium.ts").exists()
+    assert not (ext_dir / "lociaction.ts").exists()
     assert other_file.exists()  # 他ツールのファイルは無傷
 
 
 def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatch):
-    plugin_path = tmp_path / ".config" / "opencode" / "plugins" / "codeatrium.ts"
+    plugin_path = tmp_path / ".config" / "opencode" / "plugins" / "lociaction.ts"
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.hooks.Path.home", lambda: tmp_path
+        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
     )
 
     result = runner.invoke(app, ["hook", "install", "--harness", "opencode"])
@@ -310,7 +310,7 @@ def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatc
     assert result.exit_code == 0
     assert plugin_path.exists()
     content = plugin_path.read_text()
-    assert "CODEATRIUM_HOOK_MARKER" in content
+    assert "LOCIACTION_HOOK_MARKER" in content
     assert "loci index --harness opencode" in content
     assert "session.idle" in content
     assert "session.created" in content
@@ -318,9 +318,9 @@ def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatc
 
 
 def test_hook_install_grok_uses_native_hooks_file(tmp_path, monkeypatch):
-    hooks_path = tmp_path / ".grok" / "hooks" / "codeatrium.json"
+    hooks_path = tmp_path / ".grok" / "hooks" / "lociaction.json"
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.hooks.Path.home", lambda: tmp_path
+        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
     )
 
     result = runner.invoke(app, ["hook", "install", "--harness", "grok"])
@@ -358,7 +358,7 @@ def test_hook_install_grok_uses_native_hooks_file(tmp_path, monkeypatch):
 def test_hook_install_codex_uses_native_hooks_file(tmp_path, monkeypatch):
     hooks_path = tmp_path / ".codex" / "hooks.json"
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.hooks.Path.home", lambda: tmp_path
+        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
     )
 
     result = runner.invoke(app, ["hook", "install", "--harness", "codex"])
@@ -384,7 +384,7 @@ def test_hook_install_codex_uses_native_hooks_file(tmp_path, monkeypatch):
     assert "already up to date" in second.output
 
 def test_hook_install_adds_command(tmp_path, monkeypatch):
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     runner.invoke(app, ["hook", "install"])
     settings_path = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_path.read_text())
@@ -424,13 +424,13 @@ def test_hook_install_claude_command_tracks_lifecycle_commands_source(
     tmp_path, monkeypatch
 ):
     """install_hooks() が lifecycle_commands() を経由することを直接確認する
-    （codeatrium.hooks が独立してコマンド文字列を再構築していないことの回帰テスト）。
+    （lociaction.hooks が独立してコマンド文字列を再構築していないことの回帰テスト）。
     """
-    from codeatrium.hooks import install_hooks
+    from lociaction.hooks import install_hooks
 
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.lifecycle.loci_bin",
+        "lociaction.adapters.harness.lifecycle.loci_bin",
         lambda: "/fake/venv/bin/loci",
     )
 
@@ -453,7 +453,7 @@ def test_hook_install_claude_command_tracks_lifecycle_commands_source(
 
 
 def test_hook_install_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     runner.invoke(app, ["hook", "install"])
     runner.invoke(app, ["hook", "install"])
     settings_path = tmp_path / ".claude" / "settings.json"
@@ -465,7 +465,7 @@ def test_hook_install_idempotent(tmp_path, monkeypatch):
 
 
 def test_hook_install_prime_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     runner.invoke(app, ["hook", "install"])
     runner.invoke(app, ["hook", "install"])
     settings_path = tmp_path / ".claude" / "settings.json"
@@ -499,7 +499,7 @@ def test_prime_outputs_branch_usage(tmp_path, monkeypatch):
 
 
 def test_prime_silent_when_uninitialized(tmp_path, monkeypatch):
-    """.codeatrium/ がないディレクトリでは何も出力せず exit 0 で抜ける"""
+    """.lociaction/ がないディレクトリでは何も出力せず exit 0 で抜ける"""
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["prime"])
     assert result.exit_code == 0
@@ -507,7 +507,7 @@ def test_prime_silent_when_uninitialized(tmp_path, monkeypatch):
 
 
 def test_hook_install_merges_existing_settings(tmp_path, monkeypatch):
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(json.dumps({"model": "opus"}))
@@ -524,7 +524,7 @@ def test_hook_install_merges_existing_settings(tmp_path, monkeypatch):
 
 def test_write_settings_atomic_bak(tmp_path, monkeypatch):
     """install 時に既存 settings.json を .bak にバックアップする"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(json.dumps({"model": "opus"}))
@@ -540,15 +540,15 @@ def test_write_settings_atomic_bak(tmp_path, monkeypatch):
 
 def test_write_settings_failure_keeps_original_intact(tmp_path, monkeypatch):
     """書き込み失敗(例外注入)時に元 settings.json が無傷であることを確認"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     initial_content = {"model": "opus", "existing": True}
     settings_path.write_text(json.dumps(initial_content))
 
     # os.replace を例外を投げる mock に patch する
-    with patch("codeatrium.hooks.os.replace", side_effect=OSError("disk full")):
-        from codeatrium.hooks import install_hooks
+    with patch("lociaction.hooks.os.replace", side_effect=OSError("disk full")):
+        from lociaction.hooks import install_hooks
         # install_hooks() が OSError を送出することを確認
         with pytest.raises(OSError):
             install_hooks()
@@ -561,7 +561,7 @@ def test_write_settings_failure_keeps_original_intact(tmp_path, monkeypatch):
 
 def test_write_settings_atomic_no_bak_when_missing(tmp_path, monkeypatch):
     """settings.json が存在しない場合は .bak は作成されない"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
 
     result = runner.invoke(app, ["hook", "install"])
@@ -574,9 +574,9 @@ def test_write_settings_atomic_no_bak_when_missing(tmp_path, monkeypatch):
 # ---- hook uninstall ----
 
 
-def test_hook_uninstall_removes_codeatrium_hooks(tmp_path, monkeypatch):
-    """uninstall は codeatrium フックを削除する"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+def test_hook_uninstall_removes_lociaction_hooks(tmp_path, monkeypatch):
+    """uninstall は lociaction フックを削除する"""
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
 
     runner.invoke(app, ["hook", "install"])
@@ -596,7 +596,7 @@ def test_hook_uninstall_removes_codeatrium_hooks(tmp_path, monkeypatch):
 
 def test_hook_uninstall_preserves_user_hooks(tmp_path, monkeypatch):
     """uninstall はユーザーフックを保持する"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -619,7 +619,7 @@ def test_hook_uninstall_preserves_user_hooks(tmp_path, monkeypatch):
 
 def test_hook_uninstall_idempotent(tmp_path, monkeypatch):
     """uninstall は複数回実行しても安全（べき等）"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
 
     # install なしで直接 uninstall
     result1 = runner.invoke(app, ["hook", "uninstall"])
@@ -634,7 +634,7 @@ def test_hook_uninstall_idempotent(tmp_path, monkeypatch):
 
 def test_hook_uninstall_empty_matcher_removed(tmp_path, monkeypatch):
     """uninstall 後、空の matcher を持つエントリは削除される"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
 
     runner.invoke(app, ["hook", "install"])
@@ -657,9 +657,9 @@ def test_hook_install_detects_loci_hooks_under_non_canonical_matcher(
 ):
     """SessionStart の matcher がカノニカル文字列と異なっていても既存の loci
     フックを検知し、重複登録しない（issue #28: matcher差分での重複登録）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     monkeypatch.setattr(
-        "codeatrium.adapters.harness.lifecycle.loci_bin",
+        "lociaction.adapters.harness.lifecycle.loci_bin",
         lambda: "/fake/venv/bin/loci",
     )
     settings_path = tmp_path / ".claude" / "settings.json"
@@ -704,7 +704,7 @@ def test_hook_install_detects_loci_hooks_under_non_canonical_matcher(
         )
     )
 
-    from codeatrium.hooks import install_hooks
+    from lociaction.hooks import install_hooks
 
     changed, _message = install_hooks(batch_limit=20)
 
@@ -723,7 +723,7 @@ def test_hook_uninstall_does_not_delete_unrelated_command_with_loci_substring(
 ):
     """コマンドパスにたまたま "loci" を含むだけの無関係なユーザーコマンドを
     誤って削除しない（issue #28: _is_loci 部分一致の脆弱性、loci_bin prefix一致に）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -747,12 +747,12 @@ def test_hook_uninstall_does_not_delete_unrelated_command_with_loci_substring(
         )
     )
 
-    from codeatrium.hooks import uninstall_hooks
+    from lociaction.hooks import uninstall_hooks
 
     changed, message = uninstall_hooks()
 
     assert changed is False
-    assert "Nothing to uninstall" in message or "No codeatrium" in message
+    assert "Nothing to uninstall" in message or "No lociaction" in message
     data = json.loads(settings_path.read_text())
     stop_commands = [
         h["command"] for entry in data["hooks"]["Stop"] for h in entry["hooks"]
@@ -763,7 +763,7 @@ def test_hook_uninstall_preserves_quoted_loci_path_passed_to_unrelated_command(
     tmp_path, monkeypatch
 ):
     """quoted 引数の loci パスは実行ファイルではないため、uninstall で保持する。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     command = 'printf "%s\\n" "/opt/other/bin/loci" index'
@@ -777,19 +777,19 @@ def test_hook_uninstall_preserves_quoted_loci_path_passed_to_unrelated_command(
         )
     )
 
-    from codeatrium.hooks import uninstall_hooks
+    from lociaction.hooks import uninstall_hooks
 
     changed, message = uninstall_hooks()
 
     assert changed is False
-    assert "Nothing to uninstall" in message or "No codeatrium" in message
+    assert "Nothing to uninstall" in message or "No lociaction" in message
     data = json.loads(settings_path.read_text())
     assert data["hooks"]["Stop"][0]["hooks"][0]["command"] == command
 
 def test_hook_uninstall_does_not_delete_relative_bin_loci_command(tmp_path, monkeypatch):
-    """絶対パスではない `bin/loci` は codeatrium が生成する hook ではないため、
+    """絶対パスではない `bin/loci` は lociaction が生成する hook ではないため、
     action 名が同居していてもユーザーコマンドとして残す。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
@@ -811,7 +811,7 @@ def test_hook_uninstall_does_not_delete_relative_bin_loci_command(tmp_path, monk
         )
     )
 
-    from codeatrium.hooks import uninstall_hooks
+    from lociaction.hooks import uninstall_hooks
 
     changed, _message = uninstall_hooks()
 
@@ -831,7 +831,7 @@ def test_hook_uninstall_removes_hooks_installed_from_different_venv(
     インストール後に uninstall した際に既存 hook を取りこぼす）。同時に、
     無関係なユーザーコマンドは誤って削除されない（広すぎる部分文字列判定への
     後退防止）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     # 現在の環境の loci_bin() とは異なる、別 virtualenv (/old-venv) の loci で
@@ -880,7 +880,7 @@ def test_hook_uninstall_removes_hooks_installed_from_different_venv(
         )
     )
 
-    from codeatrium.hooks import uninstall_hooks
+    from lociaction.hooks import uninstall_hooks
 
     changed, message = uninstall_hooks()
 
@@ -901,12 +901,12 @@ def test_hook_uninstall_removes_hooks_installed_from_different_venv(
 def test_install_hooks_malformed_json_raises_actionable_error(tmp_path, monkeypatch):
     """settings.json が壊れている場合、生のトレースバックではなく actionable な
     エラーを送出し、書き込みを拒否する（issue #28: 不正 settings.json 未処理）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text("{not valid json")
 
-    from codeatrium.hooks import SettingsLoadError, install_hooks
+    from lociaction.hooks import SettingsLoadError, install_hooks
 
     with pytest.raises(SettingsLoadError, match="invalid JSON"):
         install_hooks()
@@ -916,12 +916,12 @@ def test_install_hooks_malformed_json_raises_actionable_error(tmp_path, monkeypa
 
 
 def test_uninstall_hooks_malformed_json_raises_actionable_error(tmp_path, monkeypatch):
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text("{not valid json")
 
-    from codeatrium.hooks import SettingsLoadError, uninstall_hooks
+    from lociaction.hooks import SettingsLoadError, uninstall_hooks
 
     with pytest.raises(SettingsLoadError, match="invalid JSON"):
         uninstall_hooks()
@@ -933,7 +933,7 @@ def test_hook_install_cli_malformed_json_gives_actionable_message_not_traceback(
     tmp_path, monkeypatch
 ):
     """CLI 経由でも生トレースバックではなく actionable なメッセージで exit する。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text("{not valid json")
@@ -948,11 +948,11 @@ def test_hook_install_cli_malformed_json_gives_actionable_message_not_traceback(
 def test_write_settings_rotates_backup_before_overwriting(tmp_path, monkeypatch):
     """2回連続の書き込みでも、直前の内容は世代アーカイブとして残る
     （issue #28: .bak 単一世代の頑健性問題）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
 
-    from codeatrium.hooks import _write_settings
+    from lociaction.hooks import _write_settings
 
     _write_settings(settings_path, {"gen": 0})
     _write_settings(settings_path, {"gen": 1})
@@ -972,12 +972,12 @@ def test_write_settings_two_consecutive_writes_preserve_last_known_good_backup(
     """2回連続の(仮に)不正な書き込みでも、最後の正常な内容の backup が
     失われない（issue #28 のコアシナリオ: 旧実装は2回目の書き込みで .bak が
     上書きされ、最後の正常な状態への復旧手段が消えていた）。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(json.dumps({"good": True}))
 
-    from codeatrium.hooks import _write_settings
+    from lociaction.hooks import _write_settings
 
     _write_settings(settings_path, {"bad": 1})
     _write_settings(settings_path, {"bad": 2})
@@ -991,11 +991,11 @@ def test_write_settings_two_consecutive_writes_preserve_last_known_good_backup(
 
 def test_write_settings_backup_rotation_caps_generations(tmp_path, monkeypatch):
     """世代アーカイブは直近 N 世代のみ保持し、無限に増え続けない。"""
-    monkeypatch.setattr("codeatrium.hooks.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
 
-    from codeatrium.hooks import _MAX_BACKUP_GENERATIONS, _write_settings
+    from lociaction.hooks import _MAX_BACKUP_GENERATIONS, _write_settings
 
     for gen in range(_MAX_BACKUP_GENERATIONS + 5):
         _write_settings(settings_path, {"gen": gen})

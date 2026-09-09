@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.eval.gen.gen_symbol_recall import (
+from lociaction.db import get_connection, init_db
+from lociaction.eval.gen.gen_symbol_recall import (
     _index_edited_files,
     generate_symbol_recall_queries,
     gold_for_symbol,
 )
-from codeatrium.resolver import Symbol
+from lociaction.resolver import Symbol
 
 
 def _seed_exchange(

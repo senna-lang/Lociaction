@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
+from lociaction.cli import app
 
 runner = CliRunner()
 
@@ -19,13 +19,13 @@ def test_server_start_rejects_uninitialized_repo(tmp_path: Path, monkeypatch) ->
     result = runner.invoke(app, ["server", "start"])
     assert result.exit_code != 0
     assert "loci init" in result.output
-    # .codeatrium ディレクトリが作成されていないこと
-    assert not (tmp_path / ".codeatrium").exists()
+    # .lociaction ディレクトリが作成されていないこと
+    assert not (tmp_path / ".lociaction").exists()
 
 
 def _make_initialized_repo(tmp_path: Path) -> Path:
     """db_path(root).exists() が True になる最小リポジトリを作る"""
-    cdir = tmp_path / ".codeatrium"
+    cdir = tmp_path / ".lociaction"
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "memory.db").touch()
     return tmp_path
@@ -44,11 +44,11 @@ def test_server_start_already_running(tmp_path: Path, monkeypatch) -> None:
     """稼働中サーバーがいる状態で start を再実行しても二重起動しない（H3）"""
     _make_initialized_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    sock = tmp_path / ".codeatrium" / "embedder.sock"
+    sock = tmp_path / ".lociaction" / "embedder.sock"
     sock.touch()  # exists() を True にする
 
     popen = MagicMock()
-    with patch("codeatrium.paths.git_root", return_value=None), \
+    with patch("lociaction.paths.git_root", return_value=None), \
         patch("socket.socket", return_value=_fake_ok_socket()), \
         patch("subprocess.Popen", popen):
         result = runner.invoke(app, ["server", "start"])
@@ -61,7 +61,7 @@ def test_server_start_stale_cleanup(tmp_path: Path, monkeypatch) -> None:
     """死亡 PID の pid ファイルが残っていても os.kill 生存確認で掃除して起動する（H3）"""
     _make_initialized_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    cdir = tmp_path / ".codeatrium"
+    cdir = tmp_path / ".lociaction"
     pid_file = cdir / "embedder.pid"
     pid_file.write_text("999999999")  # 存在しない PID（socket ファイルは作らない）
 
@@ -70,7 +70,7 @@ def test_server_start_stale_cleanup(tmp_path: Path, monkeypatch) -> None:
 
     # socket が無いので ping はスキップされ pid 生存確認パスを通る。
     # Popen 後の wait ループを抜けるため time.sleep を無効化する。
-    with patch("codeatrium.paths.git_root", return_value=None), \
+    with patch("lociaction.paths.git_root", return_value=None), \
         patch("subprocess.Popen", popen), \
         patch("time.sleep", lambda *a, **k: None):
         runner.invoke(app, ["server", "start"])
@@ -89,11 +89,11 @@ def test_server_start_concurrent_no_double_spawn(tmp_path: Path, monkeypatch) ->
     それぞれ Popen する、という issue の説明どおりのレースウィンドウを
     `Path.exists` へのバリアで強制的に発生させる。
     """
-    from codeatrium.cli.server_cmd import server_start
+    from lociaction.cli.server_cmd import server_start
 
     _make_initialized_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    sock = tmp_path / ".codeatrium" / "embedder.sock"
+    sock = tmp_path / ".lociaction" / "embedder.sock"
 
     popen_lock = threading.Lock()
     spawned_pids: list[int] = []
@@ -136,7 +136,7 @@ def test_server_start_concurrent_no_double_spawn(tmp_path: Path, monkeypatch) ->
         except Exception as e:  # typer.Exit を含め、テスト側で記録して後で検査する
             errors.append(e)
 
-    with patch("codeatrium.paths.git_root", return_value=None), \
+    with patch("lociaction.paths.git_root", return_value=None), \
         patch("subprocess.Popen", side_effect=fake_popen), \
         patch("socket.socket", side_effect=fake_socket_factory), \
         patch("time.sleep", lambda *a, **k: None), \
@@ -156,13 +156,13 @@ def test_server_status_never_deletes_socket(tmp_path: Path, monkeypatch) -> None
     """status は read-only: ping が無応答でも稼働中ソケットを削除しない（issue #16）。"""
     _make_initialized_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    sock = tmp_path / ".codeatrium" / "embedder.sock"
+    sock = tmp_path / ".lociaction" / "embedder.sock"
     sock.touch()
 
     def fake_socket_factory(*_args, **_kwargs):
         raise TimeoutError("busy: no reply within timeout")
 
-    with patch("codeatrium.paths.git_root", return_value=None), \
+    with patch("lociaction.paths.git_root", return_value=None), \
         patch("socket.socket", side_effect=fake_socket_factory):
         result = runner.invoke(app, ["server", "status"])
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from codeatrium.code_touches import (
+from lociaction.code_touches import (
     build_code_touch_rows,
     intersect_span,
     is_external_path,
@@ -10,9 +10,9 @@ from codeatrium.code_touches import (
     normalize_touched_paths,
     touches_to_edges,
 )
-from codeatrium.models import CodeTouch, FileOnly, LineRange, TextAnchor
-from codeatrium.resolver import Symbol
-from codeatrium.utils import sha256
+from lociaction.models import CodeTouch, FileOnly, LineRange, TextAnchor
+from lociaction.resolver import Symbol
+from lociaction.utils import sha256
 
 
 def test_normalize_touched_paths_passes_relative_paths_through() -> None:
@@ -33,8 +33,8 @@ def test_normalize_touched_paths_drops_paths_outside_project() -> None:
 
 
 def test_normalize_repo_path_inside_project_returns_relative() -> None:
-    result = normalize_repo_path("/Users/x/repo/src/codeatrium/db.py", "/Users/x/repo")
-    assert result == "src/codeatrium/db.py"
+    result = normalize_repo_path("/Users/x/repo/src/lociaction/db.py", "/Users/x/repo")
+    assert result == "src/lociaction/db.py"
 
 
 def test_normalize_repo_path_outside_project_returns_none() -> None:
@@ -104,7 +104,7 @@ def test_is_external_path_site_packages() -> None:
 
 
 def test_is_external_path_project_file() -> None:
-    assert is_external_path("src/codeatrium/db.py") is False
+    assert is_external_path("src/lociaction/db.py") is False
 
 
 def test_build_code_touch_rows_line_and_anchor_together_produce_one_row() -> None:

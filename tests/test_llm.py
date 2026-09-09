@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from codeatrium.llm import (
+from lociaction.llm import (
     _MAX_NETWORK_ATTEMPTS,
     DistillBackend,
     LLMValidationError,
@@ -54,7 +54,7 @@ def test_call_claude_command_args() -> None:
     mock_result.returncode = 0
     mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE)
 
-    with patch("codeatrium.llm.subprocess.run", return_value=mock_result) as mock_run:
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
         with patch("shutil.which", return_value="/usr/bin/claude"):
             call_claude("test prompt")
 
@@ -88,7 +88,7 @@ def test_call_claude_returns_dict() -> None:
     mock_result.returncode = 0
     mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE)
 
-    with patch("codeatrium.llm.subprocess.run", return_value=mock_result):
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
         with patch("shutil.which", return_value="/usr/bin/claude"):
             result = call_claude("test prompt")
 
@@ -122,9 +122,9 @@ def test_call_claude_cleanup_on_success(tmp_path: Path) -> None:
         mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE)
         return mock_result
 
-    with patch("codeatrium.llm.subprocess.run", side_effect=fake_run):
+    with patch("lociaction.llm.subprocess.run", side_effect=fake_run):
         with patch("shutil.which", return_value="/usr/bin/claude"):
-            with patch("codeatrium.llm._session_dir", return_value=tmp_path):
+            with patch("lociaction.llm._session_dir", return_value=tmp_path):
                 call_claude("test prompt")
 
     # 正常終了後は自分自身の session_id の .jsonl がクリーンアップされたことを確認
@@ -146,11 +146,11 @@ def test_call_claude_cleanup_on_timeout(tmp_path: Path) -> None:
         raise subprocess.TimeoutExpired("claude", 300)
 
     with patch(
-        "codeatrium.llm.subprocess.run",
+        "lociaction.llm.subprocess.run",
         side_effect=fake_run,
     ):
         with patch("shutil.which", return_value="/usr/bin/claude"):
-            with patch("codeatrium.llm._session_dir", return_value=tmp_path):
+            with patch("lociaction.llm._session_dir", return_value=tmp_path):
                 # TimeoutExpired が発生することを確認
                 with pytest.raises(subprocess.TimeoutExpired):
                     call_claude("test prompt")
@@ -185,9 +185,9 @@ def test_call_claude_cleanup_preserves_concurrent_session_jsonl(
         mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE)
         return mock_result
 
-    with patch("codeatrium.llm.subprocess.run", side_effect=fake_run):
+    with patch("lociaction.llm.subprocess.run", side_effect=fake_run):
         with patch("shutil.which", return_value="/usr/bin/claude"):
-            with patch("codeatrium.llm._session_dir", return_value=tmp_path):
+            with patch("lociaction.llm._session_dir", return_value=tmp_path):
                 call_claude("test prompt")
 
     # 自分自身のファイルは削除される
@@ -205,7 +205,7 @@ def test_call_claude_dispatches_to_openai_backend() -> None:
         provider="openai", model="llama3", base_url="http://localhost:11434/v1"
     )
 
-    with patch("codeatrium.llm._call_openai") as mock_call_openai:
+    with patch("lociaction.llm._call_openai") as mock_call_openai:
         mock_call_openai.return_value = MOCK_JSON_RESPONSE["structured_output"]
         call_claude("prompt", backend=backend)
 
@@ -225,7 +225,7 @@ def test_call_claude_dispatches_to_claude_by_default() -> None:
     mock_result.returncode = 0
     mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE)
 
-    with patch("codeatrium.llm._call_claude_cli") as mock_call_claude_cli:
+    with patch("lociaction.llm._call_claude_cli") as mock_call_claude_cli:
         mock_call_claude_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
         call_claude("prompt")
 
@@ -332,8 +332,8 @@ def _mock_openai_response(structured: dict[str, Any], wrap: str = "plain") -> Ma
 def test_call_openai_adds_authorization_when_key_env_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CODEATRIUM_DISTILL_API_KEY が設定されていれば Bearer トークンを付ける。"""
-    from codeatrium.llm import DISTILL_API_KEY_ENV
+    """LOCIACTION_DISTILL_API_KEY が設定されていれば Bearer トークンを付ける。"""
+    from lociaction.llm import DISTILL_API_KEY_ENV
 
     monkeypatch.setenv(DISTILL_API_KEY_ENV, "sk-test-123")
     backend = DistillBackend(
@@ -352,7 +352,7 @@ def test_call_openai_no_authorization_when_key_env_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """キー env が無ければ Authorization を付けない（Ollama 無認証経路を保持）。"""
-    from codeatrium.llm import DISTILL_API_KEY_ENV
+    from lociaction.llm import DISTILL_API_KEY_ENV
 
     monkeypatch.delenv(DISTILL_API_KEY_ENV, raising=False)
     backend = DistillBackend(
@@ -371,7 +371,7 @@ def test_call_openai_parses_wrapped_json(
     monkeypatch: pytest.MonkeyPatch, wrap: str
 ) -> None:
     """フェンス/散文で包まれた応答でも extract_json で本体を取り出してパースできる。"""
-    from codeatrium.llm import DISTILL_API_KEY_ENV
+    from lociaction.llm import DISTILL_API_KEY_ENV
 
     monkeypatch.delenv(DISTILL_API_KEY_ENV, raising=False)
     backend = DistillBackend(
@@ -465,7 +465,7 @@ def test_call_openai_retry_on_validation_failure() -> None:
 
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
         with patch(
-            "codeatrium.llm._validate_palace", side_effect=validate_side_effect
+            "lociaction.llm._validate_palace", side_effect=validate_side_effect
         ) as mock_validate:
             result = _call_openai("prompt", backend)
 
@@ -505,7 +505,7 @@ def test_call_openai_raises_after_two_validation_failures() -> None:
 
     with patch("urllib.request.urlopen", return_value=mock_response):
         with patch(
-            "codeatrium.llm._validate_palace",
+            "lociaction.llm._validate_palace",
             side_effect=LLMValidationError("always fails"),
         ):
             with pytest.raises(LLMValidationError):
@@ -606,7 +606,7 @@ def test_call_claude_cli_non_json_stdout_raises_runtime_error() -> None:
     mock_result.returncode = 0
     mock_result.stdout = "Welcome to Claude Code\n(not json)"
 
-    with patch("codeatrium.llm.subprocess.run", return_value=mock_result):
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
         with patch("shutil.which", return_value="/usr/bin/claude"):
             with pytest.raises(RuntimeError, match="non-JSON stdout"):
                 _call_claude_cli("prompt")
@@ -621,7 +621,7 @@ def test_call_claude_cli_result_field_non_json_raises_runtime_error() -> None:
     mock_result.returncode = 0
     mock_result.stdout = json.dumps({"result": "not json inside result field"})
 
-    with patch("codeatrium.llm.subprocess.run", return_value=mock_result):
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
         with patch("shutil.which", return_value="/usr/bin/claude"):
             with pytest.raises(RuntimeError, match="'result' field is not valid JSON"):
                 _call_claude_cli("prompt")
@@ -647,7 +647,7 @@ def test_call_openai_validation_retry_changes_request_body() -> None:
         return palace
 
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_urlopen:
-        with patch("codeatrium.llm._validate_palace", side_effect=validate_side_effect):
+        with patch("lociaction.llm._validate_palace", side_effect=validate_side_effect):
             _call_openai("prompt", backend)
 
     assert mock_urlopen.call_count == 2
@@ -673,7 +673,7 @@ def test_call_openai_retries_on_5xx_then_succeeds() -> None:
         "urllib.request.urlopen",
         side_effect=[_http_error(503), mock_response],
     ) as mock_urlopen:
-        with patch("codeatrium.llm.time.sleep"):
+        with patch("lociaction.llm.time.sleep"):
             result = _call_openai("prompt", backend)
 
     assert mock_urlopen.call_count == 2
@@ -693,7 +693,7 @@ def test_call_openai_retries_on_timeout_then_succeeds() -> None:
         "urllib.request.urlopen",
         side_effect=[TimeoutError("timed out"), mock_response],
     ) as mock_urlopen:
-        with patch("codeatrium.llm.time.sleep"):
+        with patch("lociaction.llm.time.sleep"):
             result = _call_openai("prompt", backend)
 
     assert mock_urlopen.call_count == 2
@@ -709,7 +709,7 @@ def test_call_openai_does_not_retry_on_4xx() -> None:
     )
 
     with patch("urllib.request.urlopen", side_effect=_http_error(400)) as mock_urlopen:
-        with patch("codeatrium.llm.time.sleep") as mock_sleep:
+        with patch("lociaction.llm.time.sleep") as mock_sleep:
             with pytest.raises(RuntimeError):
                 _call_openai("prompt", backend)
 
@@ -726,7 +726,7 @@ def test_call_openai_raises_after_network_retries_exhausted() -> None:
     )
 
     with patch("urllib.request.urlopen", side_effect=_http_error(503)) as mock_urlopen:
-        with patch("codeatrium.llm.time.sleep"):
+        with patch("lociaction.llm.time.sleep"):
             with pytest.raises(RuntimeError):
                 _call_openai("prompt", backend)
 

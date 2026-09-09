@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from codeatrium.embedder_server import _handle_client, ping_server, run_server
+from lociaction.embedder_server import _handle_client, ping_server, run_server
 
 
 def _read_line(sock: socket.socket) -> dict:
@@ -161,7 +161,7 @@ def test_run_server_refuses_to_clobber_live_socket(monkeypatch) -> None:
             load_calls["n"] += 1
             return MagicMock()
 
-        import codeatrium.embedder_server as es_module
+        import lociaction.embedder_server as es_module
 
         monkeypatch.setattr(es_module, "_load_embedder", fake_load_embedder)
 
@@ -196,7 +196,7 @@ def test_run_server_idle_timeout_removes_pid_file(monkeypatch) -> None:
     import shutil
     import tempfile
 
-    import codeatrium.embedder_server as es_module
+    import lociaction.embedder_server as es_module
 
     tmp_dir = Path(tempfile.mkdtemp(dir="/tmp"))
     sock = tmp_dir / "e.sock"

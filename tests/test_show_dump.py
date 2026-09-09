@@ -18,8 +18,8 @@ from pathlib import Path
 import numpy as np
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection, init_db
+from lociaction.cli import app
+from lociaction.db import get_connection, init_db
 
 runner = CliRunner()
 
@@ -27,9 +27,9 @@ LONG = "x" * 200
 
 
 def _setup(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir()
-    db = codeatrium_dir / "memory.db"
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    db = lociaction_dir / "memory.db"
     init_db(db)
     con = get_connection(db)
     return db, con
@@ -228,7 +228,7 @@ def test_dump_closes_connection_when_query_fails(tmp_path, monkeypatch):
     con.close()
     failing_connection = FailingConnection()
     monkeypatch.setattr(
-        "codeatrium.db.get_connection", lambda _db: failing_connection
+        "lociaction.db.get_connection", lambda _db: failing_connection
     )
 
     result = runner.invoke(app, ["dump"])

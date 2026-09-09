@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from codeatrium.eval.metrics import mrr, recall_at_k
+from lociaction.eval.metrics import mrr, recall_at_k
 
 
 def test_recall_at_k_counts_gold_hits_within_top_k() -> None:

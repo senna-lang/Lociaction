@@ -6,7 +6,7 @@
 - `loci eval gate` (issue #37) is a CI regression gate for symbol-recall.
   It builds a tiny synthetic git+`code_edges` fixture (no network, no
   embeddings, no dogfood corpus) and fails if MRR@10 drops more than an
-  absolute 0.01 against committed `src/codeatrium/eval/baseline.json`.
+  absolute 0.01 against committed `src/lociaction/eval/baseline.json`.
   Keyword-recall (BM25/HNSW/RRF) remains out of scope.
 
 - `loci status` now surfaces the most recent distill per-row failure
@@ -28,9 +28,9 @@
 
 - `loci hook install`/`uninstall --harness omp-pi|opencode|grok` now write real
   native hooks (issue #40): `OmpPiHooks`/`OpenCodeHooks` generate a marker-owned
-  `~/.omp/agent/extensions/codeatrium.ts` / `~/.config/opencode/plugins/codeatrium.ts`
+  `~/.omp/agent/extensions/lociaction.ts` / `~/.config/opencode/plugins/lociaction.ts`
   plugin file (`DedicatedFileWriter`), and `GrokHooks` merges into a dedicated
-  `~/.grok/hooks/codeatrium.json` (`MergedJsonHookWriter`, shared with the new
+  `~/.grok/hooks/lociaction.json` (`MergedJsonHookWriter`, shared with the new
   `CodexHooks`). All three previously always failed via `FallbackHooks`, which
   remains the safety net for unrecognized harnesses.
 
@@ -42,17 +42,17 @@
 
 - Lifecycle event → loci command mapping (`Stop`→`index`, `SessionStart`→
   `server start`/`distill`/`prime`, compact→`prime`) is now a single source of
-  truth: `codeatrium.adapters.harness.lifecycle.lifecycle_commands(harness,
+  truth: `lociaction.adapters.harness.lifecycle.lifecycle_commands(harness,
   batch_limit)`. `ClaudeHooks`/`CodexHooks`/`GrokHooks`/`OmpPiHooks`/
   `OpenCodeHooks` all derive their commands from it instead of re-deriving
-  the mapping per harness (`codeatrium.hooks.install_hooks`/`uninstall_hooks`
+  the mapping per harness (`lociaction.hooks.install_hooks`/`uninstall_hooks`
   keep their Claude-specific JSON-merge/idempotency logic, only the command
   strings themselves are now sourced from the shared helper). One observable
   side effect: Claude's `Stop` hook now runs `loci index --harness claude`
   instead of the previous bare `loci index` (which implicitly swept every
   detected harness on each Claude turn), matching the scoping Codex already had.
 - `DedicatedFileWriter` uninstall only ever deletes files carrying its own
-  `CODEATRIUM_HOOK_MARKER`; files without the marker (other tools' extensions/
+  `LOCIACTION_HOOK_MARKER`; files without the marker (other tools' extensions/
   plugins sharing the same auto-discovered directory) are left untouched on
   both install (no clobber) and uninstall (no delete).
 
@@ -73,7 +73,7 @@
     user-supplied branch string into a `LIKE '%...%'` pattern unescaped, so
     literal `%`/`_` in the query were interpreted as SQL wildcards (e.g.
     `main` incorrectly matching `maintenance`/`feat/main-x`). Wildcard
-    characters are now escaped (new `codeatrium.utils.escape_like`) and the
+    characters are now escaped (new `lociaction.utils.escape_like`) and the
     clause carries an explicit `ESCAPE '\\'`; substring matching on
     non-wildcard input is unchanged.
 - Embedding server lifecycle races (issue #16): `loci server start` now serializes
@@ -94,7 +94,7 @@
 - `loci search "query" --branch NAME` — branch-filtered semantic search.
 - `loci context --branch NAME` — reverse lookup from a git branch to past conversations (includes undistilled exchanges).
 - `loci context --full` flag; the default output is now lighter.
-- `loci hook uninstall` — remove codeatrium hooks from `settings.json`.
+- `loci hook uninstall` — remove lociaction hooks from `settings.json`.
 - SQLite hardening: WAL mode, `busy_timeout`, and a `user_version`-based migration framework.
 - Distillation transactions with `distill_status` and version tracking, plus new indexes.
 
@@ -110,7 +110,7 @@
 - Silent data loss in the distillation pipeline; code reverse-lookup works again.
 - Embedding server can no longer double-start; socket protocol hardened and connection leaks fixed.
 - Ply coordinate drift and WAL sidecar file permissions.
-- `loci prime` exits silently when `.codeatrium/` is absent; resolving `.codeatrium/` from a parent directory now notifies on stderr.
+- `loci prime` exits silently when `.lociaction/` is absent; resolving `.lociaction/` from a parent directory now notifies on stderr.
 
 ## [0.2.0] - 2026-04-21
 
@@ -130,7 +130,7 @@
 
 ### Fixed
 
-- `loci init` cleans up `.codeatrium/` automatically if the execution phase fails or is interrupted (`KeyboardInterrupt`), so re-running is safe.
+- `loci init` cleans up `.lociaction/` automatically if the execution phase fails or is interrupted (`KeyboardInterrupt`), so re-running is safe.
 - A single corrupt `.jsonl` no longer aborts the whole indexing loop — it logs a warning and continues.
 - `git_root()` catches `FileNotFoundError` when the `git` binary is missing.
 - `parse_exchanges` returns `[]` for missing files instead of raising.
@@ -140,7 +140,7 @@
 
 ### Added
 
-- `loci init` — initialize `.codeatrium/` in project root
+- `loci init` — initialize `.lociaction/` in project root
 - `loci index` — parse `.jsonl` session logs, split into exchanges, embed with multilingual-e5-small
 - `loci distill` — distill exchanges via `claude --print` into palace objects (exchange_core, specific_context, room_assignments)
 - `loci search` — cross-layer RRF fusion search (BM25 verbatim + HNSW distilled)

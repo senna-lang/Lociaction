@@ -1,5 +1,5 @@
 """
-JsonlLogSource の `.codeatrium/ignore` プライバシフィルタと JSONL artifact 抽出のテスト。
+JsonlLogSource の `.lociaction/ignore` プライバシフィルタと JSONL artifact 抽出のテスト。
 
 artifact は indexer と同じ「有効な JSON エントリのみ」の ply 座標を使い、空行または
 破損行を含むログでも対応する exchange へ touch を関連付ける。
@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from codeatrium.adapters.harness.jsonl_source import JsonlLogSource
-from codeatrium.core.models import CanonicalSession
-from codeatrium.indexer import Exchange
-from codeatrium.models import CodeTouch
+from lociaction.adapters.harness.jsonl_source import JsonlLogSource
+from lociaction.core.models import CanonicalSession
+from lociaction.indexer import Exchange
+from lociaction.models import CodeTouch
 
 
 def _make_session(project_root: Path) -> CanonicalSession:
@@ -48,9 +48,9 @@ class _RecordingTouchAdapter:
 
 def test_parse_exchanges_excludes_exchange_touching_ignored_file(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
-    codeatrium_dir = project_root / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    (codeatrium_dir / "ignore").write_text("secrets/*\n")
+    lociaction_dir = project_root / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    (lociaction_dir / "ignore").write_text("secrets/*\n")
 
     def fake_parser(jsonl_path: Path, min_chars: int, last_ply_end: int) -> list[Exchange]:
         return [

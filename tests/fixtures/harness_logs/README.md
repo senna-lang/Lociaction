@@ -3,7 +3,7 @@
 5ハーネス（claude / codex / omp-pi / opencode / grok）の編集記録の**形**を手で写した合成ログ。
 実ログから内容を無害なダミーに置き換えたもの。**会話本文・絶対パス・他プロジェクト名は含まれていない。**
 
-実ログはこのリポジトリに絶対に置かない（ローカルの `~/codeatrium-fixtures/` にのみ退避、コミット禁止）。
+実ログはこのリポジトリに絶対に置かない（ローカルの `~/lociaction-fixtures/` にのみ退避、コミット禁止）。
 ここにあるファイルだけがテストに使ってよいデータ。
 
 各ファイルの形は、2026-08-08 に実ログ（Claude 7本 / codex 154本 / omp-pi 99本 / grok 39本 / opencode.db 1本）
@@ -56,7 +56,7 @@ role は `user` / `assistant` に加えて **`toolResult` が独立したロー�
 
 1. **パスの正は toolCall ではなく toolResult 側**。toolCall のヘッダは入れ子の作業ディレクトリ
    基準に切り詰められることがあり（実測1014件中95件が不一致。すべて basename は一致し
-   プレフィックスだけが欠ける。例: 呼び出し `config.py` → 実際 `src/codeatrium/config.py`）、
+   プレフィックスだけが欠ける。例: 呼び出し `config.py` → 実際 `src/lociaction/config.py`）、
    そのまま cwd と結合すると実在しないパスへひも付ける。`toolCallId` で対応する toolResult 本文の
    `[path#hash]` ヘッダを優先すること。
 2. **パスの大半は相対**（edit ヘッダ 323/343・write の `path` 475/568）。絶対化には

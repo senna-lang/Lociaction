@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.search import (
+from lociaction.db import get_connection, init_db
+from lociaction.search import (
     BM25Result,
     FusedResult,
     HNSWPalaceResult,
@@ -305,7 +305,7 @@ def test_search_bm25_connection_leak(tmp_path: Path) -> None:
     fake_con = MagicMock()
     fake_con.execute.side_effect = RuntimeError("test error")
 
-    with patch("codeatrium.search.get_connection", return_value=fake_con):
+    with patch("lociaction.search.get_connection", return_value=fake_con):
         with pytest.raises(RuntimeError):
             search_bm25(db_path, "query")
 
@@ -320,7 +320,7 @@ def test_search_hnsw_connection_leak(tmp_path: Path) -> None:
     fake_con = MagicMock()
     fake_con.execute.side_effect = RuntimeError("test error")
 
-    with patch("codeatrium.search.get_connection", return_value=fake_con):
+    with patch("lociaction.search.get_connection", return_value=fake_con):
         with pytest.raises(RuntimeError):
             search_hnsw_palace(db_path, np.ones(384, dtype=np.float32))
 
@@ -370,7 +370,7 @@ def test_search_combined_shares_single_connection(tmp_path: Path) -> None:
     con.close()
 
     with patch(
-        "codeatrium.search.get_connection", wraps=get_connection
+        "lociaction.search.get_connection", wraps=get_connection
     ) as mock_get_connection:
         results = search_combined(
             db_path, "connection pool", np.ones(384, dtype=np.float32), limit=5
@@ -406,9 +406,9 @@ def test_search_combined_connection_leak(tmp_path: Path) -> None:
     proxy = _CloseCountingConnection(con)
 
     with patch(
-        "codeatrium.search.get_connection", return_value=proxy
+        "lociaction.search.get_connection", return_value=proxy
     ), patch(
-        "codeatrium.search._enrich_results", side_effect=RuntimeError("enrich failed")
+        "lociaction.search._enrich_results", side_effect=RuntimeError("enrich failed")
     ):
         with pytest.raises(RuntimeError):
             search_combined(

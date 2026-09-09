@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.context_lookup import (
+from lociaction.context_lookup import (
     ContextTarget,
     parse_context_target,
     pick_enclosing_symbol_name,
@@ -12,7 +12,7 @@ from codeatrium.context_lookup import (
     resolve_u2,
     select_ply_window,
 )
-from codeatrium.db import get_connection, init_db
+from lociaction.db import get_connection, init_db
 
 LONG = "x" * 200
 
@@ -276,7 +276,7 @@ def test_resolve_u1_alias_paths_widen_symbol_tier(tmp_path: Path) -> None:
     con.commit()
 
     hits = resolve_u1(
-        con, "src/codeatrium/db.py", "get_connection", limit=5,
+        con, "src/lociaction/db.py", "get_connection", limit=5,
         alias_paths=("src/logo/db.py",),
     )
 
@@ -439,7 +439,7 @@ def test_resolve_u2_alias_paths_widen_file_tier(tmp_path: Path) -> None:
     con.commit()
 
     hits = resolve_u2(
-        con, "src/codeatrium/db.py", limit=5, alias_paths=("src/logo/db.py",)
+        con, "src/lociaction/db.py", limit=5, alias_paths=("src/logo/db.py",)
     )
 
     assert len(hits) == 1

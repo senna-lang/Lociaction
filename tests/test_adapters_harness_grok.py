@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from codeatrium.adapters.harness.grok import edit_capability, extract_code_touches
-from codeatrium.models import FileOnly, TextAnchor
+from lociaction.adapters.harness.grok import edit_capability, extract_code_touches
+from lociaction.models import FileOnly, TextAnchor
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "grok.jsonl"
 

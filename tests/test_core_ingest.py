@@ -5,15 +5,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from codeatrium.core.ingest import _git_blob_near, ingest_parse_result
-from codeatrium.core.models import (
+from lociaction.core.ingest import _git_blob_near, ingest_parse_result
+from lociaction.core.models import (
     CanonicalExchange,
     CanonicalSession,
     ExchangeArtifacts,
     ParseResult,
 )
-from codeatrium.db import get_connection, init_db
-from codeatrium.models import CodeTouch, FileOnly, LineRange
+from lociaction.db import get_connection, init_db
+from lociaction.models import CodeTouch, FileOnly, LineRange
 from tests.conftest import run_git
 
 
@@ -37,7 +37,7 @@ def test_ingest_persists_provenance_cursor_and_files(tmp_path: Path) -> None:
                 ply_end=4,
                 user_content="add a canonical persistence path",
                 agent_content="implemented it",
-                files_touched=("src/codeatrium/core/ingest.py",),
+                files_touched=("src/lociaction/core/ingest.py",),
                 agent_model="gpt-5",
                 agent_provider="openai",
             ),
@@ -69,7 +69,7 @@ def test_ingest_persists_provenance_cursor_and_files(tmp_path: Path) -> None:
         "openai",
         "v1:ply:4",
     )
-    assert [row[0] for row in files] == ["src/codeatrium/core/ingest.py"]
+    assert [row[0] for row in files] == ["src/lociaction/core/ingest.py"]
 
 
 def test_ingest_persists_parent_session_ref_on_new_conversation(tmp_path: Path) -> None:

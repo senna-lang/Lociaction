@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codeatrium"
-version = "0.3.0"
+name = "lociaction"
+version = "0.1.0"
 description = "Memory palace for AI coding agents — index sessions, recall code context in <0.2s"
 readme = "README.md"
 license = { text = "MIT" }
@@ -58,12 +58,12 @@ dev = [
 ]
 
 [project.scripts]
-loci = "codeatrium.cli:app"
+loci = "lociaction.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/senna-lang/codeatrium"
-Repository = "https://github.com/senna-lang/codeatrium"
-Issues = "https://github.com/senna-lang/codeatrium/issues"
+Homepage = "https://github.com/senna-lang/lociaction"
+Repository = "https://github.com/senna-lang/lociaction"
+Issues = "https://github.com/senna-lang/lociaction/issues"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -72,11 +72,12 @@ exclude = [
     ".github/",
     ".logosyncx/",
     "docs/internal/",
+    "docs/design/",
     "mem/",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codeatrium"]
+packages = ["src/lociaction"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,10 +1,10 @@
-"""codeatrium.adapters.model.registry のユニットテスト"""
+"""lociaction.adapters.model.registry のユニットテスト"""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from codeatrium.adapters.model.registry import (
+from lociaction.adapters.model.registry import (
     _ollama_model_pulled,
     check_ready,
     detect_claude_cli,
@@ -16,8 +16,8 @@ from codeatrium.adapters.model.registry import (
     setup,
     write_client_config,
 )
-from codeatrium.adapters.model.types import ClientStatus
-from codeatrium.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
+from lociaction.adapters.model.types import ClientStatus
+from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
 
 # ---- detect_ollama_ft ----
 
@@ -157,7 +157,7 @@ def test_setup_unsupported_client_id() -> None:
 
 
 def test_resolve_client_claude_cli(monkeypatch) -> None:
-    from codeatrium.config import Config
+    from lociaction.config import Config
 
     cfg = Config(distill_model="claude-haiku-4-5-20251001")
     client = resolve_client("claude-cli", cfg)
@@ -166,7 +166,7 @@ def test_resolve_client_claude_cli(monkeypatch) -> None:
 
 
 def test_resolve_client_ollama_ft_uses_config_overrides() -> None:
-    from codeatrium.config import Config
+    from lociaction.config import Config
 
     cfg = Config(distill_model="custom-ft-model", distill_base_url="http://x:1/v1")
     client = resolve_client("ollama-ft", cfg)
@@ -175,7 +175,7 @@ def test_resolve_client_ollama_ft_uses_config_overrides() -> None:
 
 
 def test_resolve_client_openai_compat_requires_base_url() -> None:
-    from codeatrium.config import Config
+    from lociaction.config import Config
 
     cfg = Config(distill_model="m", distill_base_url=None)
     try:
@@ -187,7 +187,7 @@ def test_resolve_client_openai_compat_requires_base_url() -> None:
 
 
 def test_resolve_client_unknown_id_raises() -> None:
-    from codeatrium.config import Config
+    from lociaction.config import Config
 
     try:
         resolve_client("bogus", Config())
@@ -215,7 +215,7 @@ def test_check_ready_unknown_client_is_unavailable() -> None:
 
 
 def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
-    from codeatrium.adapters.model.types import ModelClient
+    from lociaction.adapters.model.types import ModelClient
 
     config_path = tmp_path / "config.toml"
     client = ModelClient(
@@ -234,7 +234,7 @@ def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
 
 
 def test_write_client_config_drops_legacy_provider_key(tmp_path) -> None:
-    from codeatrium.adapters.model.types import ModelClient
+    from lociaction.adapters.model.types import ModelClient
 
     config_path = tmp_path / "config.toml"
     config_path.write_text('[distill]\nprovider = "claude"\nbatch_limit = 5\n')
@@ -254,7 +254,7 @@ def test_write_client_config_drops_legacy_provider_key(tmp_path) -> None:
 
 
 def test_write_client_config_preserves_index_min_chars(tmp_path) -> None:
-    from codeatrium.adapters.model.types import ModelClient
+    from lociaction.adapters.model.types import ModelClient
 
     config_path = tmp_path / "config.toml"
     config_path.write_text('[distill]\nprovider = "claude"\n\n[index]\nmin_chars = 200\n')
@@ -330,7 +330,7 @@ def test_write_client_config_escapes_quotes_and_backslashes(tmp_path) -> None:
     しており、次回起動時のパースが壊れていた）"""
     import tomllib
 
-    from codeatrium.adapters.model.types import ModelClient
+    from lociaction.adapters.model.types import ModelClient
 
     config_path = tmp_path / "config.toml"
     tricky_model = 'weird"model\\name'

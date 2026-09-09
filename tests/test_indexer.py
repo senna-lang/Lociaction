@@ -5,11 +5,11 @@
 import json
 from pathlib import Path
 
-from codeatrium.core.ingest import ingest_parse_result
-from codeatrium.core.models import CanonicalExchange, CanonicalSession, ParseResult
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import index_file, parse_exchanges
-from codeatrium.utils import sha256
+from lociaction.core.ingest import ingest_parse_result
+from lociaction.core.models import CanonicalExchange, CanonicalSession, ParseResult
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import index_file, parse_exchanges
+from lociaction.utils import sha256
 
 # ---- フィクスチャ ----
 
@@ -160,7 +160,7 @@ def test_parse_exchanges_branch_per_exchange(tmp_path: Path) -> None:
 
 def test_index_file_persists_git_branch(tmp_path: Path) -> None:
     """index_file が git_branch を DB に保存する"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -315,7 +315,7 @@ def test_parse_exchanges_deterministic_id(tmp_path: Path) -> None:
 
 
 def test_index_file_inserts_to_db(tmp_path: Path) -> None:
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -339,7 +339,7 @@ def test_index_file_inserts_to_db(tmp_path: Path) -> None:
 
 def test_index_file_dedup(tmp_path: Path) -> None:
     """同じファイルを2回 index しても exchange は重複しない"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -363,7 +363,7 @@ def test_index_file_dedup(tmp_path: Path) -> None:
 
 def test_index_file_incremental(tmp_path: Path) -> None:
     """セッション途中で追記された exchange が差分インデックスされる"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -437,7 +437,7 @@ def test_index_file_parses_only_appended_jsonl_entries(
     tmp_path: Path, monkeypatch
 ) -> None:
     """再インデックスでは追記行だけを JSON パースする（issue #22）。"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
     jsonl = tmp_path / "session.jsonl"
     existing_entries = [
@@ -476,7 +476,7 @@ def test_index_file_parses_only_appended_jsonl_entries(
         parse_calls += 1
         return loads(*args, **kwargs)
 
-    monkeypatch.setattr("codeatrium.indexer.json.loads", count_loads)
+    monkeypatch.setattr("lociaction.indexer.json.loads", count_loads)
 
     assert index_file(jsonl, db_path) == 1
     assert parse_calls == 2
@@ -486,7 +486,7 @@ def test_index_file_migrates_legacy_ply_cursor_without_duplicates(
     tmp_path: Path,
 ) -> None:
     """v1 ply cursor の既存 exchange は stable id へ in-place 移行する（issue #22）。"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
     jsonl = tmp_path / "session.jsonl"
     write_jsonl(
@@ -590,7 +590,7 @@ def test_parse_exchanges_excludes_compaction_content(tmp_path: Path) -> None:
 
 def test_index_file_fts_populated(tmp_path: Path) -> None:
     """FTS インデックスに内容が入る"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -666,16 +666,16 @@ def test_parse_exchanges_tool_use_excludes_external(tmp_path: Path) -> None:
     assert len(exchanges[0].files) == 0
 
 
-# ---- .codeatrium/ignore プライバシフィルタ（issue #36） ----
+# ---- .lociaction/ignore プライバシフィルタ（issue #36） ----
 
 
 def test_index_file_excludes_exchange_touching_ignored_file(tmp_path: Path) -> None:
     """ignore パターンにマッチするファイルへ触れた exchange は索引されない"""
     project_root = tmp_path / "proj"
-    codeatrium_dir = project_root / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    (codeatrium_dir / "ignore").write_text("secrets/*\n")
-    db_path = codeatrium_dir / "memory.db"
+    lociaction_dir = project_root / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    (lociaction_dir / "ignore").write_text("secrets/*\n")
+    db_path = lociaction_dir / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -705,11 +705,11 @@ def test_index_file_reconsiders_previously_ignored_exchange_after_rule_removed(
 ) -> None:
     """cursor は除外分だけ進めない——ignore ルールを外せば次回実行で拾える"""
     project_root = tmp_path / "proj"
-    codeatrium_dir = project_root / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    ignore_path = codeatrium_dir / "ignore"
+    lociaction_dir = project_root / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    ignore_path = lociaction_dir / "ignore"
     ignore_path.write_text("secrets/*\n")
-    db_path = codeatrium_dir / "memory.db"
+    db_path = lociaction_dir / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -730,11 +730,11 @@ def test_index_file_reconsiders_previously_ignored_exchange_after_rule_removed(
 
 
 def test_index_file_without_ignore_file_indexes_everything(tmp_path: Path) -> None:
-    """`.codeatrium/ignore` が存在しない場合は何も除外しない（既定の後方互換）"""
+    """`.lociaction/ignore` が存在しない場合は何も除外しない（既定の後方互換）"""
     project_root = tmp_path / "proj"
-    codeatrium_dir = project_root / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    db_path = codeatrium_dir / "memory.db"
+    lociaction_dir = project_root / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    db_path = lociaction_dir / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -752,7 +752,7 @@ def test_index_file_without_ignore_file_indexes_everything(tmp_path: Path) -> No
 
 def test_index_file_writes_exchange_files(tmp_path: Path) -> None:
     """index_file が exchange_files テーブルに書き込む"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -774,7 +774,7 @@ def test_index_file_writes_exchange_files(tmp_path: Path) -> None:
 
 def test_index_file_exchange_files_dedup(tmp_path: Path) -> None:
     """同じ exchange 内の複数の tool_use ブロックでも exchange_files は重複しない"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -843,7 +843,7 @@ def make_edit_tool_use_and_result(
 def test_index_file_writes_code_touches_when_project_root_given(tmp_path: Path) -> None:
     """project_root を渡すと code_touches に記録される（design §5.3）"""
     project_root = tmp_path
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = project_root / "session.jsonl"
@@ -872,7 +872,7 @@ def test_index_file_skips_code_touches_outside_project_root(tmp_path: Path) -> N
     """不変条件3: プロジェクト外のパスは記録しない"""
     project_root = tmp_path / "repo"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = project_root / "session.jsonl"
@@ -895,7 +895,7 @@ def test_index_file_skips_code_touches_outside_project_root(tmp_path: Path) -> N
 
 def test_index_file_without_project_root_skips_code_touches(tmp_path: Path) -> None:
     """project_root 未指定なら code_touches の記録自体をスキップする（後方互換）"""
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     jsonl = tmp_path / "session.jsonl"
@@ -922,7 +922,7 @@ def test_index_file_without_project_root_skips_code_touches(tmp_path: Path) -> N
 def test_index_file_writes_code_edges_matching_symbol(tmp_path: Path) -> None:
     """編集行がシンボルの範囲と重なれば granularity='line' の code_edges ができる"""
     project_root = tmp_path
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     src_dir = project_root / "src"
@@ -967,7 +967,7 @@ def test_index_file_writes_code_edges_file_granularity_for_unsupported_language(
     """resolver.py が未対応の言語（.md）ではシンボルが無いので、必ずファイル粒度に落ちる
     （design §8.1 不変条件2: シンボル不明でもファイル粒度で必ず1本張る）"""
     project_root = tmp_path
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     (project_root / "README.md").write_text("# Title\n\nSome text.\n")
@@ -1003,7 +1003,7 @@ def test_index_file_every_code_touch_has_at_least_one_code_edge(tmp_path: Path) 
     両方含めても、両方の code_touches に対応する code_edges ができることを確認する。
     """
     project_root = tmp_path
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     src_dir = project_root / "src"
@@ -1045,7 +1045,7 @@ def test_index_file_code_edges_added_accumulates_across_touches_on_same_symbol(
     added は上書きではなく合算されなければならない（さもないと §6.3 の並び替えで
     log1p(added) が過小評価される）"""
     project_root = tmp_path
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     src_dir = project_root / "src"

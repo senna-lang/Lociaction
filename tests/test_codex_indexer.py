@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import index_file, parse_codex_exchanges
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import index_file, parse_codex_exchanges
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "codex.jsonl"
 
@@ -45,7 +45,7 @@ def test_index_file_indexes_codex_edges_and_move_paths(tmp_path: Path) -> None:
 
     rollout = tmp_path / "rollout.jsonl"
     _write_rollout(rollout, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_file(
@@ -79,7 +79,7 @@ def test_index_file_codex_is_incremental(tmp_path: Path) -> None:
     """同じ Codex rollout を再実行しても exchange を重複登録しない。"""
     rollout = tmp_path / "rollout.jsonl"
     _write_rollout(rollout, tmp_path)
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     assert index_file(rollout, db_path, min_chars=1, harness="codex") == 1

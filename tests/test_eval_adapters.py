@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.eval.adapters.symbol import SymbolAdapter
-from codeatrium.eval.datasets.schema import Query
+from lociaction.db import get_connection, init_db
+from lociaction.eval.adapters.symbol import SymbolAdapter
+from lociaction.eval.datasets.schema import Query
 
 
 def test_symbol_adapter_resolves_via_code_edges(tmp_path: Path) -> None:

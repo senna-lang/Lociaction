@@ -1,8 +1,8 @@
-"""codeatrium.utils の純関数に対する単体テスト"""
+"""lociaction.utils の純関数に対する単体テスト"""
 
 from __future__ import annotations
 
-from codeatrium.utils import escape_like
+from lociaction.utils import escape_like
 
 
 def test_escape_like_escapes_percent_wildcard() -> None:

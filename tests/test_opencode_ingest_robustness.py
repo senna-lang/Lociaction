@@ -15,10 +15,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-from codeatrium.core.ingest import ingest_parse_result
-from codeatrium.core.models import CanonicalExchange, CanonicalSession, ParseResult
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import (
+from lociaction.core.ingest import ingest_parse_result
+from lociaction.core.models import CanonicalExchange, CanonicalSession, ParseResult
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import (
     _load_opencode_raw_entries,
     index_opencode_db,
     parse_opencode_exchanges,
@@ -105,7 +105,7 @@ def test_corrupt_row_does_not_abort_whole_db_ingestion(tmp_path: Path) -> None:
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     # 破損行があっても例外を送出せず、正常な exchange は取り込まれる。
@@ -165,7 +165,7 @@ def test_non_dict_json_row_is_skipped_not_crashed(tmp_path: Path) -> None:
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -206,7 +206,7 @@ def test_worktree_none_is_skipped_not_raised(tmp_path: Path) -> None:
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -244,7 +244,7 @@ def test_out_of_order_message_does_not_reemit_existing_exchange(tmp_path: Path) 
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     first = index_opencode_db(
@@ -316,7 +316,7 @@ def test_db_path_with_special_uri_characters_is_opened_correctly(tmp_path: Path)
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -408,7 +408,7 @@ def test_upgrade_from_legacy_position_based_cursor_does_not_duplicate(
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     _seed_legacy_opencode_exchanges(opencode_db, db_path, project_root, "ses1")
@@ -465,7 +465,7 @@ def test_upgrade_with_out_of_order_message_migrates_legacy_and_captures_new(
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     # msg1 を旧スキーム（source_turn_id=str(ply_start)=="0"）で取り込み済みにする。
@@ -550,7 +550,7 @@ def test_upgrade_with_duplicate_content_legacy_exchanges_does_not_leave_duplicat
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     # 両方とも旧スキーム（source_turn_id=str(ply_start)）で取り込み済みにする。
@@ -627,7 +627,7 @@ def test_migrated_legacy_exchange_reflects_new_position_not_stale_one(
     con.commit()
     con.close()
 
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     # msg1 は ply_start=0, ply_end=1 の legacy exchange として取り込み済み。

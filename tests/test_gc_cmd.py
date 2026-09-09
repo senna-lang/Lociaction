@@ -8,14 +8,14 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection, init_db
+from lociaction.cli import app
+from lociaction.db import get_connection, init_db
 
 runner = CliRunner()
 
 
 def _setup_db(tmp_path: Path) -> Path:
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     db.parent.mkdir()
     init_db(db)
     return db

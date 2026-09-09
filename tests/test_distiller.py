@@ -11,15 +11,15 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.distiller import (
+from lociaction.db import get_connection, init_db
+from lociaction.distiller import (
     PalaceObject,
     distill_all,
     distill_exchange,
     extract_files_touched,
     save_palace_object,
 )
-from codeatrium.llm import DistillBackend
+from lociaction.llm import DistillBackend
 
 # --- フィクスチャ ---
 
@@ -213,7 +213,7 @@ def test_extract_files_keeps_hidden_dot_directory() -> None:
 # --- distill_exchange ---
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_returns_palace(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -225,7 +225,7 @@ def test_distill_exchange_returns_palace(mock_call, tmp_path) -> None:
     assert len(palace.room_assignments) == 1
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_calls_claude_once(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -233,7 +233,7 @@ def test_distill_exchange_calls_claude_once(mock_call, tmp_path) -> None:
     mock_call.assert_called_once()
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_extracts_files(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -243,7 +243,7 @@ def test_distill_exchange_extracts_files(mock_call, tmp_path) -> None:
     assert "src/db/pool.py" in palace.files_touched
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_merges_exchange_files(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -865,7 +865,7 @@ def test_save_palace_object_saves_vec(tmp_path) -> None:
 # --- distill_all ---
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_all_processes_undistilled(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -874,13 +874,13 @@ def test_distill_all_processes_undistilled(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, _ = distill_all(db_path)
 
     assert count == 1
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_all_skips_distilled(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -894,13 +894,13 @@ def test_distill_all_skips_distilled(mock_call, tmp_path) -> None:
     con.close()
 
     mock_embedder = MagicMock()
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, _ = distill_all(db_path)
 
     assert count == 0
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_all_returns_count(mock_call, tmp_path) -> None:
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -910,13 +910,13 @@ def test_distill_all_returns_count(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, _ = distill_all(db_path)
 
     assert count == 2
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_all_returns_tuple(mock_call, tmp_path) -> None:
     """distill_all は tuple を返す"""
     db_path = tmp_path / "memory.db"
@@ -926,14 +926,14 @@ def test_distill_all_returns_tuple(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         result = distill_all(db_path)
 
     assert isinstance(result, tuple)
     assert len(result) == 2
 
 
-@patch("codeatrium.distiller.call_claude")
+@patch("lociaction.distiller.call_claude")
 def test_distill_all_error_count(mock_call, tmp_path) -> None:
     """distill_all はエラー数をカウントして返す"""
     db_path = tmp_path / "memory.db"
@@ -947,14 +947,14 @@ def test_distill_all_error_count(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, errors = distill_all(db_path)
 
     assert count == 1
     assert errors == 1
 
 
-@patch("codeatrium.distiller.call_claude")
+@patch("lociaction.distiller.call_claude")
 def test_distill_all_persists_last_error_in_meta(mock_call, tmp_path) -> None:
     """per-row 例外の直近失敗を meta に残す（issue #37, loci status 可視化）。"""
     db_path = tmp_path / "memory.db"
@@ -967,13 +967,13 @@ def test_distill_all_persists_last_error_in_meta(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, errors = distill_all(db_path)
 
     assert count == 1
     assert errors == 1
 
-    from codeatrium.db import get_last_distill_error
+    from lociaction.db import get_last_distill_error
 
     err = get_last_distill_error(db_path)
     assert err is not None
@@ -1081,7 +1081,7 @@ def test_save_palace_object_rollback_on_error(tmp_path) -> None:
     con.close()
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_accepts_backend(mock_call, tmp_path) -> None:
     """distill_exchange は backend パラメータを受け取れる"""
     db_path = tmp_path / "memory.db"
@@ -1096,7 +1096,7 @@ def test_distill_exchange_accepts_backend(mock_call, tmp_path) -> None:
     mock_call.assert_called_once()
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_all_accepts_backend(mock_call, tmp_path) -> None:
     """distill_all は backend パラメータを受け取れる"""
     db_path = tmp_path / "memory.db"
@@ -1109,15 +1109,15 @@ def test_distill_all_accepts_backend(mock_call, tmp_path) -> None:
     mock_embedder = MagicMock()
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
-    with patch("codeatrium.distiller.Embedder", return_value=mock_embedder):
+    with patch("lociaction.distiller.Embedder", return_value=mock_embedder):
         count, _ = distill_all(db_path, backend=backend)
 
     assert count == 1
 
 
-@patch("codeatrium.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
+@patch("lociaction.distiller.call_claude", return_value=MOCK_PALACE_RESPONSE)
 def test_distill_exchange_patch_point_unchanged(mock_call, tmp_path) -> None:
-    """patch('codeatrium.distiller.call_claude') がパッチ対象として機能し続ける（回帰防止）"""
+    """patch('lociaction.distiller.call_claude') がパッチ対象として機能し続ける（回帰防止）"""
     db_path = tmp_path / "memory.db"
     init_db(db_path)
     palace = distill_exchange("ex1", db_path, "pool の設定", "pool_size=5", 0, 3)

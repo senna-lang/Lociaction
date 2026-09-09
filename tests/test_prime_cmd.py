@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.cli.prime_cmd import (
+from lociaction.cli.prime_cmd import (
     BEGIN_MARKER,
     END_MARKER,
     PRIME_TEXT,
@@ -34,7 +34,7 @@ def test_prime_text_has_concrete_search_example():
 def test_prime_text_has_concrete_context_example():
     """PRIME_TEXT must contain a concrete U1 (file+symbol) loci context example
     (design §6.1: --symbol is no longer the primary form shown to agents)"""
-    assert "loci context src/codeatrium/search.py:search_combined" in PRIME_TEXT
+    assert "loci context src/lociaction/search.py:search_combined" in PRIME_TEXT
 
 
 def test_prime_text_context_section_is_marked_primary_and_comes_first():
@@ -101,7 +101,7 @@ def test_prime_text_ide_selection_guards_against_over_fire():
 
 def test_prime_text_ide_selection_no_longer_requires_manual_symbol_resolution():
     """design §6.4: the agent must NOT be asked to resolve the enclosing symbol itself
-    (e.g. via LSP) before calling loci context — codeatrium resolves <file>:<line> for it.
+    (e.g. via LSP) before calling loci context — lociaction resolves <file>:<line> for it.
     This intentionally supersedes the old instruction to look up the enclosing symbol
     via LSP before calling loci context --symbol."""
     assert "LSP" not in PRIME_TEXT

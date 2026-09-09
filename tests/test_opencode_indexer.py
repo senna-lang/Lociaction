@@ -10,8 +10,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import index_opencode_db
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import index_opencode_db
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "opencode.json"
 
@@ -84,7 +84,7 @@ def test_index_opencode_db_indexes_touches_and_edges(tmp_path: Path) -> None:
 
     opencode_db = tmp_path / "opencode.db"
     _write_opencode_db(opencode_db, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -117,7 +117,7 @@ def test_index_opencode_db_skips_sessions_outside_project_root(tmp_path: Path) -
 
     project_root = tmp_path / "project"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -131,20 +131,20 @@ def test_index_opencode_db_skips_sessions_outside_project_root(tmp_path: Path) -
 
 
 def test_index_opencode_db_excludes_exchange_touching_ignored_file(tmp_path: Path) -> None:
-    """`.codeatrium/ignore` にマッチするファイルへ触れた exchange は取り込まない（issue #36）"""
+    """`.lociaction/ignore` にマッチするファイルへ触れた exchange は取り込まない（issue #36）"""
     project_root = tmp_path / "project"
     source_dir = project_root / "src"
     source_dir.mkdir(parents=True)
     (source_dir / "fs.py").write_text("def list_dir(path):\n    return path\n")
     (source_dir / "result.py").write_text("class Result:\n    pass\n")
 
-    codeatrium_dir = project_root / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    (codeatrium_dir / "ignore").write_text("src/*\n")
+    lociaction_dir = project_root / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    (lociaction_dir / "ignore").write_text("src/*\n")
 
     opencode_db = tmp_path / "opencode.db"
     _write_opencode_db(opencode_db, project_root)
-    db_path = codeatrium_dir / "memory.db"
+    db_path = lociaction_dir / "memory.db"
     init_db(db_path)
 
     indexed = index_opencode_db(
@@ -163,7 +163,7 @@ def test_index_opencode_db_is_incremental(tmp_path: Path) -> None:
     project_root.mkdir()
     opencode_db = tmp_path / "opencode.db"
     _write_opencode_db(opencode_db, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     assert (
@@ -184,7 +184,7 @@ def test_index_opencode_db_parses_only_appended_rows(
     project_root.mkdir()
     opencode_db = tmp_path / "opencode.db"
     _write_opencode_db(opencode_db, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
     assert (
         index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)
@@ -245,7 +245,7 @@ def test_index_opencode_db_parses_only_appended_rows(
         parse_calls += 1
         return loads(*args, **kwargs)
 
-    monkeypatch.setattr("codeatrium.indexer.json.loads", count_loads)
+    monkeypatch.setattr("lociaction.indexer.json.loads", count_loads)
 
     assert (
         index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)

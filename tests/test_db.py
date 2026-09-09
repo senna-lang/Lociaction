@@ -7,7 +7,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from codeatrium.db import (
+from lociaction.db import (
     _MIGRATIONS,
     _backfill_touch_time_symbol_edges,
     _migrate_v6_recompute_symbol_ids,
@@ -17,7 +17,7 @@ from codeatrium.db import (
     get_connection,
     init_db,
 )
-from codeatrium.utils import sha256
+from lociaction.utils import sha256
 from tests.conftest import run_git
 
 
@@ -519,7 +519,7 @@ def test_secure_db_files_chmods_existing_directory_and_sidecars(tmp_path: Path) 
     """`_secure_db_files` はディレクトリ・DB 本体・存在する WAL/SHM のいずれも
     0o700/0o600 へ強制する（issue #36 のコア機構そのものの直接テスト）。
     """
-    from codeatrium.db import _secure_db_files
+    from lociaction.db import _secure_db_files
 
     db_dir = tmp_path / "sub"
     db_dir.mkdir()
@@ -1834,10 +1834,10 @@ def test_migration_v9_idempotent(tmp_path: Path) -> None:
 
 
 def _project_db_path(tmp_path: Path) -> Path:
-    """project_root / .codeatrium / memory.db という実際のレイアウトを再現する"""
+    """project_root / .lociaction / memory.db という実際のレイアウトを再現する"""
     project_root = tmp_path / "proj"
-    (project_root / ".codeatrium").mkdir(parents=True)
-    return project_root / ".codeatrium" / "memory.db"
+    (project_root / ".lociaction").mkdir(parents=True)
+    return project_root / ".lociaction" / "memory.db"
 
 
 def _build_pre_backfill_db(db_path: Path) -> sqlite3.Connection:
@@ -2124,7 +2124,7 @@ def test_backfill_touch_time_symbol_edges_upgrades_stale_file_edge(
     file edge the old pipeline made is left in place, not deleted."""
     project_root = tmp_path / "proj"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
 
     run_git(project_root, "init")
     run_git(project_root, "config", "user.email", "t@t.com")
@@ -2178,12 +2178,12 @@ def test_backfill_touch_time_symbol_edges_never_clobbers_current_symbol_row(
     *before* the move must not clobber it with stale pre-move coordinates
     when this backfill runs — current-line lookup for that symbol must
     keep working."""
-    from codeatrium.context_lookup import pick_enclosing_symbol_name
-    from codeatrium.resolver import SymbolResolver
+    from lociaction.context_lookup import pick_enclosing_symbol_name
+    from lociaction.resolver import SymbolResolver
 
     project_root = tmp_path / "proj"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
 
     run_git(project_root, "init")
     run_git(project_root, "config", "user.email", "t@t.com")
@@ -2267,7 +2267,7 @@ def test_backfill_touch_time_symbol_edges_never_clobbers_current_symbol_row(
 def test_backfill_touch_time_symbol_edges_is_idempotent(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
 
     run_git(project_root, "init")
     run_git(project_root, "config", "user.email", "t@t.com")
@@ -2302,7 +2302,7 @@ def test_backfill_touch_time_symbol_edges_flag_prevents_rescan_via_init_db(
     matches the once-only contract of `_backfill_legacy_code_edges`."""
     project_root = tmp_path / "proj"
     project_root.mkdir()
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
 
     run_git(project_root, "init")
     run_git(project_root, "config", "user.email", "t@t.com")

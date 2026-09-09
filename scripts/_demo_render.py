@@ -52,7 +52,7 @@ SEARCH = """\
       { "room_type": "concept", "room_label": "Rank fusion" }
     ],
     "symbols": [
-      { "name": "rrf_fuse", "file": "src/codeatrium/search.py",
+      { "name": "rrf_fuse", "file": "src/lociaction/search.py",
         "line": 88, "signature": "def rrf_fuse(bm25, hnsw, k=60)" }
     ],
     "verbatim_ref": ".../session.jsonl:ply=204",
@@ -65,7 +65,7 @@ CONTEXT = """\
   {
     "symbol_name": "rrf_fuse",
     "symbol_kind": "function",
-    "file_path": "src/codeatrium/search.py",
+    "file_path": "src/lociaction/search.py",
     "signature": "def rrf_fuse(bm25, hnsw, k=60)",
     "line": 88,
     "exchange_core": "Chose RRF over CombMNZ to avoid hit_count skew",

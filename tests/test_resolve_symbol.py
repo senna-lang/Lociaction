@@ -5,8 +5,8 @@
 （推測して間違った症状を出さないことが最優先 — §3.3）。
 """
 
-from codeatrium.code_touches import resolve_line_range, resolve_symbol_name
-from codeatrium.models import FileOnly, LineRange, TextAnchor
+from lociaction.code_touches import resolve_line_range, resolve_symbol_name
+from lociaction.models import FileOnly, LineRange, TextAnchor
 
 # ---- resolve_line_range ----
 

@@ -4,17 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`codeatrium` is a CLI-first memory layer for AI coding agents. The command is `loci`. It lets agents like Claude Code search past conversations, retrieve code locations (file + line + symbol), and link conversation history to code symbols.
+`lociaction` is a CLI-first memory layer for AI coding agents. The command is `loci`. It lets agents like Claude Code search past conversations, retrieve code locations (file + line + symbol), and link conversation history to code symbols.
 
 Primary user is **the agent itself**, not a human. The tool is invoked via `loci search "..." --json` from within agent prompts.
 
 ## Project Structure
 
 ```
-codeatrium/
+lociaction/
 ├── CLAUDE.md                          # このファイル（エージェント向けガイド）
 ├── AGENTS.md                          # 他エージェント向け使用ガイド（共通）
-├── src/codeatrium/
+├── src/lociaction/
 │   ├── cli/                           # CLI 層（typer）
 │   │   ├── __init__.py                # app 定義 + init + サブコマンド登録
 │   │   ├── index_cmd.py               # loci index
@@ -26,7 +26,7 @@ codeatrium/
 │   │   └── server_cmd.py              # loci server start/stop/status
 │   ├── models.py                      # 共有データクラス
 │   ├── paths.py                       # パス解決ヘルパー
-│   ├── config.py                      # .codeatrium/config.toml 読み込み
+│   ├── config.py                      # .lociaction/config.toml 読み込み
 │   ├── hooks.py                       # Claude Code hook JSON 操作
 │   ├── llm.py                         # claude --print ラッパー + プロンプト
 │   ├── db.py                          # SQLite スキーマ・接続管理
@@ -37,7 +37,7 @@ codeatrium/
 │   ├── embedder_server.py             # Unix ソケット embedding サーバー
 │   └── resolver.py                    # tree-sitter シンボル解決
 ├── tests/                             # pytest テスト（96件）
-├── .codeatrium/                       # インデックス DB + config（git 管理外）
+├── .lociaction/                       # インデックス DB + config（git 管理外）
 │   ├── memory.db
 │   └── config.toml
 └── docs/internal/                     # 内部ドキュメント（git 管理外）
@@ -86,7 +86,7 @@ query → BM25 (FTS5 verbatim) + HNSW (distilled embedding)
 
 ## Configuration
 
-`.codeatrium/config.toml` でカスタマイズ可能（`loci init` 時に自動生成）:
+`.lociaction/config.toml` でカスタマイズ可能（`loci init` 時に自動生成）:
 
 ```toml
 [distill]
@@ -109,7 +109,7 @@ base_url = "http://localhost:11434/v1"   # Ollama（LM Studio は :1234/v1）
 ## CLI Commands
 
 ```bash
-loci init                                    # Initialize .codeatrium/ in project root
+loci init                                    # Initialize .lociaction/ in project root
 loci index                                   # Index new .jsonl files
 loci distill [--limit N]                     # Distill queued exchanges via claude --print
 loci search "query" --json --limit 5         # Semantic search (agent-facing)
@@ -134,12 +134,12 @@ loci hook install                            # Register hooks to ~/.claude/setti
 
 ---
 
-<!-- BEGIN CODEATRIUM -->
-## Past Memory Search (codeatrium)
+<!-- BEGIN LOCIACTION -->
+## Past Memory Search (lociaction)
 
 IMPORTANT: Full usage instructions are injected automatically at session start via `loci prime` (SessionStart hook).
 If not in context, run `loci prime`.
-<!-- END CODEATRIUM -->
+<!-- END LOCIACTION -->
 
 ---
 

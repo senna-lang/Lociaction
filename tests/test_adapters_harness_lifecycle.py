@@ -8,7 +8,7 @@ harness を変えても on_turn_end に `--harness {harness}` だけが変わり
 
 from __future__ import annotations
 
-from codeatrium.adapters.harness.lifecycle import lifecycle_commands
+from lociaction.adapters.harness.lifecycle import lifecycle_commands
 
 
 def test_on_turn_end_scopes_index_to_the_calling_harness() -> None:

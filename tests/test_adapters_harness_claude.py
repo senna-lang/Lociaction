@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-from codeatrium.adapters.harness.claude import (
+from lociaction.adapters.harness.claude import (
     edit_capability,
     extract_code_touches,
     parent_session_ref,
 )
-from codeatrium.models import FileOnly, LineRange, TextAnchor
+from lociaction.models import FileOnly, LineRange, TextAnchor
 
 
 def _tool_use(tool_id: str, name: str, input_dict: dict) -> dict:

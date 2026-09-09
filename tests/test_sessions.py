@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
+from lociaction.db import get_connection, init_db
 
 
 def test_legacy_conversation_backfills_canonical_session(

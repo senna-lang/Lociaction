@@ -11,7 +11,7 @@
 #   transparent background that adapts to GitHub light/dark mode (starship
 #   style). Rich's `dim` style renders as #c4c4c4, unreadable on white, so
 #   remap it to a mid-gray legible on both modes.
-# - python: stretch the three CODEATRIUM half-block lines vertically by
+# - python: stretch the three LOCIACTION half-block lines vertically by
 #   BANNER_VSCALE. The wordmark is plain <text> in JetBrains Mono, so a
 #   non-uniform scale on just those rows makes the letters taller without
 #   touching the box, tagline, or version string. The rows are found by
@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 BANNER_VSCALE="${BANNER_VSCALE:-1.25}"
 
 FORCE_COLOR=1 uv run python -c "
-from codeatrium.cli import _print_banner
+from lociaction.cli import _print_banner
 _print_banner()
 " | freeze \
     --output assets/banner.svg \
@@ -51,7 +51,7 @@ scale = float(os.environ["BANNER_VSCALE"])
 path = pathlib.Path("assets/banner.svg")
 svg = path.read_text()
 
-# The CODEATRIUM wordmark is three consecutive <text> rows carrying the
+# The LOCIACTION wordmark is three consecutive <text> rows carrying the
 # blue gradient fills; everything else (box, tagline, version) is untouched.
 gradient = ("#7bb8ff", "#4a9eff", "#1b45a8")
 rows = [

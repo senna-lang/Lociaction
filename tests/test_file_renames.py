@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.file_renames import parse_rename_log, resolve_aliases
+from lociaction.db import get_connection, init_db
+from lociaction.file_renames import parse_rename_log, resolve_aliases
 from tests.conftest import run_git
 
 # ---- parse_rename_log（純関数） ----
 
 
 def test_parse_rename_log_single_rename() -> None:
-    output = "R100\tsrc/logo/db.py\tsrc/codeatrium/db.py\n"
-    assert parse_rename_log(output) == [("src/logo/db.py", "src/codeatrium/db.py")]
+    output = "R100\tsrc/logo/db.py\tsrc/lociaction/db.py\n"
+    assert parse_rename_log(output) == [("src/logo/db.py", "src/lociaction/db.py")]
 
 
 def test_parse_rename_log_no_renames_returns_empty() -> None:

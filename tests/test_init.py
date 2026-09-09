@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection
+from lociaction.cli import app
+from lociaction.db import get_connection
 
 runner = CliRunner()
 
@@ -25,7 +25,7 @@ def _no_distill_clients_by_default(monkeypatch):
     """discover() が実機の ollama/claude を拾わないよう、既定で両方 unavailable にする。
     distill client 選択フローを検証するテストは discover/check_ready を個別に monkeypatch する。
     """
-    from codeatrium.adapters.model.types import ClientStatus
+    from lociaction.adapters.model.types import ClientStatus
 
     def _fake_discover():
         return [
@@ -43,7 +43,7 @@ def _no_distill_clients_by_default(monkeypatch):
             ),
         ]
 
-    monkeypatch.setattr("codeatrium.adapters.model.registry.discover", _fake_discover)
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
 def _create_jsonl(
@@ -122,7 +122,7 @@ def _setup_project_with_sessions(
 
     # resolve_claude_projects_path をモックして直接 projects_dir を返す
     monkeypatch.setattr(
-        "codeatrium.paths.resolve_claude_projects_path",
+        "lociaction.paths.resolve_claude_projects_path",
         lambda _root: projects_dir,
     )
 
@@ -137,7 +137,7 @@ def test_init_creates_db(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 def test_init_prints_banner(tmp_path, monkeypatch):
@@ -159,8 +159,8 @@ def test_init_creates_agents_md_section(tmp_path, monkeypatch):
     agents_md = tmp_path / "AGENTS.md"
     assert agents_md.exists()
     content = agents_md.read_text()
-    assert "<!-- BEGIN CODEATRIUM -->" in content
-    assert "<!-- END CODEATRIUM -->" in content
+    assert "<!-- BEGIN LOCIACTION -->" in content
+    assert "<!-- END LOCIACTION -->" in content
     assert "loci prime" in content
     assert not (tmp_path / "CLAUDE.md").exists()
 
@@ -178,7 +178,7 @@ def test_init_agents_md_message_prints_before_indexing_output(tmp_path, monkeypa
 
     output = result.output
     initialized_pos = output.index("Initialized:")
-    agents_md_pos = output.index("(codeatrium section)")
+    agents_md_pos = output.index("(lociaction section)")
     indexed_pos = output.index("Indexed ")
     assert initialized_pos < agents_md_pos < indexed_pos
 
@@ -191,16 +191,16 @@ def test_init_appends_to_existing_agents_md(tmp_path, monkeypatch):
     runner.invoke(app, ["init", "--no-local-distiller"])
     content = agents_md.read_text()
     assert content.startswith("# My Project")
-    assert "<!-- BEGIN CODEATRIUM -->" in content
+    assert "<!-- BEGIN LOCIACTION -->" in content
 
 
-def test_init_updates_existing_codeatrium_section(tmp_path, monkeypatch):
+def test_init_updates_existing_lociaction_section(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     agents_md = tmp_path / "AGENTS.md"
     agents_md.write_text(
         "# Proj\n\n"
-        "<!-- BEGIN CODEATRIUM -->\nold content\n<!-- END CODEATRIUM -->\n\n"
+        "<!-- BEGIN LOCIACTION -->\nold content\n<!-- END LOCIACTION -->\n\n"
         "## Other\n"
     )
     runner.invoke(app, ["init", "--no-local-distiller"])
@@ -219,9 +219,9 @@ def test_init_already_initialized(tmp_path, monkeypatch):
 
 
 def test_init_non_git_does_not_traverse_parent(tmp_path, monkeypatch):
-    """git 外ディレクトリで init すると親の .codeatrium を拾わない"""
-    # 親に .codeatrium を配置
-    parent_db = tmp_path / ".codeatrium" / "memory.db"
+    """git 外ディレクトリで init すると親の .lociaction を拾わない"""
+    # 親に .lociaction を配置
+    parent_db = tmp_path / ".lociaction" / "memory.db"
     parent_db.parent.mkdir()
     parent_db.touch()
 
@@ -233,7 +233,7 @@ def test_init_non_git_does_not_traverse_parent(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
     assert "Initialized" in result.output
-    assert (child / ".codeatrium" / "memory.db").exists()
+    assert (child / ".lociaction" / "memory.db").exists()
 
 
 # ---- skip-existing ----
@@ -246,7 +246,7 @@ def test_init_skip_existing_marks_all_as_skipped(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     null_count = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
@@ -271,7 +271,7 @@ def test_init_distill_limit_keeps_recent(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller", "--distill-limit", "2"], input="1\n1\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     null_count = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
@@ -298,7 +298,7 @@ def test_init_prompt_distill_all(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n3\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     null_count = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
@@ -320,7 +320,7 @@ def test_init_prompt_skip_all(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     null_count = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
@@ -347,7 +347,7 @@ def test_init_min_chars_flag(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller", "--min-chars", "200", "--skip-existing"])
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     total = con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     con.close()
@@ -367,7 +367,7 @@ def test_init_min_chars_prompt_select_100(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="2\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     total = con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
     con.close()
@@ -402,7 +402,7 @@ def test_init_distill_priority_longest(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n1\n2\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     # 蒸留対象(NULL) は最長の1件だけ
     distill_targets = con.execute(
@@ -426,7 +426,7 @@ def test_init_distill_priority_recent(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n1\n1\n1\n")
     assert result.exit_code == 0
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     # 蒸留対象(NULL) は最新の1件だけ
     target = con.execute(
@@ -454,7 +454,7 @@ def test_init_prompt_invalid_choice_reprompts(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Invalid choice" in result.output
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     skipped = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at = 'skipped'"
@@ -489,7 +489,7 @@ def test_init_custom_count_out_of_range_reprompts(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Must be ≥ 1" in result.output
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     con = get_connection(db)
     null_count = con.execute(
         "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
@@ -513,7 +513,7 @@ def test_init_custom_count_over_total_reprompts(tmp_path, monkeypatch):
 
 
 def test_init_cleanup_on_execution_failure(tmp_path, monkeypatch):
-    """実行フェーズで例外が出たら .codeatrium/ がクリーンアップされる"""
+    """実行フェーズで例外が出たら .lociaction/ がクリーンアップされる"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
@@ -522,44 +522,44 @@ def test_init_cleanup_on_execution_failure(tmp_path, monkeypatch):
         db_path.write_bytes(b"partial")
         raise RuntimeError("simulated failure")
 
-    monkeypatch.setattr("codeatrium.db.init_db", _boom)
+    monkeypatch.setattr("lociaction.db.init_db", _boom)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 1
     assert "init failed" in result.output
     assert "simulated failure" in result.output
     # 部分状態が掃除されている
-    assert not (tmp_path / ".codeatrium").exists()
+    assert not (tmp_path / ".lociaction").exists()
 
 
 def test_init_preserves_preexisting_dir_on_failure(tmp_path, monkeypatch):
-    """実行フェーズ失敗時、.codeatrium/ が既存なら削除しない"""
+    """実行フェーズ失敗時、.lociaction/ が既存なら削除しない"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
-    # ユーザーが事前に .codeatrium/ と config.toml を作成しておく
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir()
-    custom_config = codeatrium_dir / "config.toml"
+    # ユーザーが事前に .lociaction/ と config.toml を作成しておく
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    custom_config = lociaction_dir / "config.toml"
     custom_config.write_text("[distill]\nmodel = \"claude-opus-4-7\"\n")
 
     def _boom(db_path):
         raise RuntimeError("simulated failure")
 
-    monkeypatch.setattr("codeatrium.db.init_db", _boom)
+    monkeypatch.setattr("lociaction.db.init_db", _boom)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 1
-    # pre-existing .codeatrium/ とその中の config.toml は削除されていない
-    assert codeatrium_dir.exists()
+    # pre-existing .lociaction/ とその中の config.toml は削除されていない
+    assert lociaction_dir.exists()
     assert custom_config.exists()
     assert custom_config.read_text() == "[distill]\nmodel = \"claude-opus-4-7\"\n"
 
 
-def test_init_agents_md_failure_does_not_delete_completed_codeatrium(
+def test_init_agents_md_failure_does_not_delete_completed_lociaction(
     tmp_path, monkeypatch
 ):
-    """AGENTS.md 注入は .codeatrium/ 作成の成否とは独立した領域で実行される。
+    """AGENTS.md 注入は .lociaction/ 作成の成否とは独立した領域で実行される。
     ここでの失敗は init 全体を失敗にせず、既に作成済みの DB/config を
     rmtree で巻き込んではならない (#17)。
     """
@@ -569,56 +569,56 @@ def test_init_agents_md_failure_does_not_delete_completed_codeatrium(
     def _boom(_root):
         raise RuntimeError("agents.md write failed")
 
-    monkeypatch.setattr("codeatrium.cli.prime_cmd.inject_agents_md", _boom)
+    monkeypatch.setattr("lociaction.cli.prime_cmd.inject_agents_md", _boom)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
     assert "AGENTS.md update failed" in result.output
     assert "agents.md write failed" in result.output
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
-    assert (tmp_path / ".codeatrium" / "config.toml").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "config.toml").exists()
 
 
-def test_init_agents_md_interrupt_does_not_delete_completed_codeatrium(
+def test_init_agents_md_interrupt_does_not_delete_completed_lociaction(
     tmp_path, monkeypatch
 ):
-    """AGENTS.md 注入中の Ctrl-C も同様に .codeatrium/ を削除してはならない (#17)。"""
+    """AGENTS.md 注入中の Ctrl-C も同様に .lociaction/ を削除してはならない (#17)。"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
     def _interrupt(_root):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("codeatrium.cli.prime_cmd.inject_agents_md", _interrupt)
+    monkeypatch.setattr("lociaction.cli.prime_cmd.inject_agents_md", _interrupt)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 130
     assert "Interrupted" in result.output
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 
-def test_init_malformed_agents_md_marker_does_not_delete_fresh_codeatrium(
+def test_init_malformed_agents_md_marker_does_not_delete_fresh_lociaction(
     tmp_path, monkeypatch
 ):
     """AGENTS.md に BEGIN マーカーのみ (END 欠落) がある場合、inject_agents_md の
-    ValueError で init 全体が失敗し、作成直後の .codeatrium/ (DB・config 含む) が
+    ValueError で init 全体が失敗し、作成直後の .lociaction/ (DB・config 含む) が
     rmtree で消えてはならない (#17)。
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     (tmp_path / "AGENTS.md").write_text(
-        "# Proj\n\n<!-- BEGIN CODEATRIUM -->\nold content\n"
+        "# Proj\n\n<!-- BEGIN LOCIACTION -->\nold content\n"
     )
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
-    assert (tmp_path / ".codeatrium" / "config.toml").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "config.toml").exists()
 
 
 def test_init_cleanup_on_keyboard_interrupt(tmp_path, monkeypatch):
-    """Ctrl-C で .codeatrium/ がクリーンアップされる"""
+    """Ctrl-C で .lociaction/ がクリーンアップされる"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
@@ -627,12 +627,12 @@ def test_init_cleanup_on_keyboard_interrupt(tmp_path, monkeypatch):
         db_path.write_bytes(b"partial")
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("codeatrium.db.init_db", _interrupt)
+    monkeypatch.setattr("lociaction.db.init_db", _interrupt)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 130
     assert "Interrupted" in result.output
-    assert not (tmp_path / ".codeatrium").exists()
+    assert not (tmp_path / ".lociaction").exists()
 
 
 def test_init_per_file_index_error_continues(tmp_path, monkeypatch):
@@ -641,7 +641,7 @@ def test_init_per_file_index_error_continues(tmp_path, monkeypatch):
         tmp_path, monkeypatch, num_files=2, exchanges_per_file=3
     )
 
-    import codeatrium.indexer as idx_mod
+    import lociaction.indexer as idx_mod
 
     original = idx_mod.index_file
     call_count = {"n": 0}
@@ -652,14 +652,14 @@ def test_init_per_file_index_error_continues(tmp_path, monkeypatch):
             raise RuntimeError("flaky fs error")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr("codeatrium.indexer.index_file", _flaky)
+    monkeypatch.setattr("lociaction.indexer.index_file", _flaky)
 
     # --skip-existing でも min_chars プロンプトは出る → "1"=50
     result = runner.invoke(app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n")
     assert result.exit_code == 0
     assert "flaky fs error" in result.output
     # 2ファイル目は成功し DB は残っている
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 # ---- hook auto-install ----
@@ -676,7 +676,7 @@ def test_init_installs_hooks_by_default(tmp_path, monkeypatch):
         calls.append(batch_limit)
         return True, "Installed hooks."
 
-    monkeypatch.setattr("codeatrium.hooks.install_hooks", _spy)
+    monkeypatch.setattr("lociaction.hooks.install_hooks", _spy)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
@@ -695,7 +695,7 @@ def test_init_no_hooks_flag_skips_install(tmp_path, monkeypatch):
         calls.append(batch_limit)
         return True, "Installed hooks."
 
-    monkeypatch.setattr("codeatrium.hooks.install_hooks", _spy)
+    monkeypatch.setattr("lociaction.hooks.install_hooks", _spy)
 
     result = runner.invoke(app, ["init", "--no-local-distiller", "--no-hooks"])
     assert result.exit_code == 0
@@ -711,14 +711,14 @@ def test_init_hook_install_failure_warns_but_succeeds(tmp_path, monkeypatch):
     def _boom(batch_limit: int = 20):
         raise RuntimeError("permission denied")
 
-    monkeypatch.setattr("codeatrium.hooks.install_hooks", _boom)
+    monkeypatch.setattr("lociaction.hooks.install_hooks", _boom)
 
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0  # init 自体は成功
     assert "Hook install failed" in result.output
     assert "permission denied" in result.output
     # DB は残っている
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 # ---- EmbedderSetupError 環境エラーの友好的ハンドリング ----
@@ -729,7 +729,7 @@ def test_embedder_setup_error_wraps_import_failure(monkeypatch):
     import sys
     import types
 
-    from codeatrium.embedder import Embedder, EmbedderSetupError
+    from lociaction.embedder import Embedder, EmbedderSetupError
 
     fake = types.ModuleType("sentence_transformers")
 
@@ -740,7 +740,7 @@ def test_embedder_setup_error_wraps_import_failure(monkeypatch):
     fake.SentenceTransformer = _Broken  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
     # ソケットを無効化して必ず直接ロード経路に入れる
-    monkeypatch.setenv("CODEATRIUM_NO_SOCK", "1")
+    monkeypatch.setenv("LOCIACTION_NO_SOCK", "1")
 
     with pytest.raises(EmbedderSetupError, match="numpy"):
         Embedder().embed_passage("test")
@@ -752,8 +752,8 @@ def test_init_distill_embedder_setup_error_friendly_message(tmp_path, monkeypatc
         tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
     )
 
-    from codeatrium.adapters.model.types import ClientStatus, ModelClient
-    from codeatrium.embedder import EmbedderSetupError
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.embedder import EmbedderSetupError
 
     def _raising_distill_all(*_args, **_kwargs):
         raise EmbedderSetupError(
@@ -762,9 +762,9 @@ def test_init_distill_embedder_setup_error_friendly_message(tmp_path, monkeypatc
             "  Fix: pip install 'numpy<2'  or  pip install -U pyarrow"
         )
 
-    monkeypatch.setattr("codeatrium.distiller.distill_all", _raising_distill_all)
+    monkeypatch.setattr("lociaction.distiller.distill_all", _raising_distill_all)
     monkeypatch.setattr(
-        "codeatrium.adapters.model.registry.check_ready",
+        "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
             id="claude-cli",
             label="Claude CLI",
@@ -792,7 +792,7 @@ def test_init_distill_embedder_setup_error_friendly_message(tmp_path, monkeypatc
     assert "numpy<2" in result.output
     assert "loci distill" in result.output
     # DB はクリーンアップされず残っている（索引済み）
-    assert (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 # ---- distill client 選択フロー（discover/setup/select） ----
@@ -807,13 +807,13 @@ def test_init_no_ready_client_leaves_distill_unconfigured(tmp_path, monkeypatch)
     assert result.exit_code == 0
     assert "No distill client is ready" in result.output
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'loci distill --setup' in config
     assert '\nclient = "' not in config
 
 
 def _patch_setupable_ollama_only(monkeypatch):
-    from codeatrium.adapters.model.types import ClientStatus
+    from lociaction.adapters.model.types import ClientStatus
 
     def _fake_discover():
         return [
@@ -831,7 +831,7 @@ def _patch_setupable_ollama_only(monkeypatch):
             ),
         ]
 
-    monkeypatch.setattr("codeatrium.adapters.model.registry.discover", _fake_discover)
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
 def test_init_setupable_ollama_declined_leaves_unconfigured(tmp_path, monkeypatch):
@@ -844,14 +844,14 @@ def test_init_setupable_ollama_declined_leaves_unconfigured(tmp_path, monkeypatc
     assert result.exit_code == 0
     assert "Set up Ollama" in result.output
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert '\nclient = "' not in config
 
 
 def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
     """setup offer を承諾し setup() が成功すると Ready 化した client が config に書かれる"""
-    from codeatrium.adapters.model.types import ClientStatus, ModelClient
-    from codeatrium.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
@@ -892,21 +892,21 @@ def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
         setup_calls.append(client_id)
         return True, f"pulled {LOCAL_DISTILL_MODEL}"
 
-    monkeypatch.setattr("codeatrium.adapters.model.registry.discover", _fake_discover)
-    monkeypatch.setattr("codeatrium.adapters.model.registry.setup", _fake_setup)
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
+    monkeypatch.setattr("lociaction.adapters.model.registry.setup", _fake_setup)
 
     result = runner.invoke(app, ["init"], input="y\n\n")
     assert result.exit_code == 0
     assert setup_calls == ["ollama-ft"]
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "ollama-ft"' in config
     assert f'model = "{LOCAL_DISTILL_MODEL}"' in config
     assert f'base_url = "{LOCAL_DISTILL_BASE_URL}"' in config
 
 
 def _patch_both_ready(monkeypatch):
-    from codeatrium.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
 
     ollama_client = ModelClient(
         id="ollama-ft",
@@ -941,7 +941,7 @@ def _patch_both_ready(monkeypatch):
             ),
         ]
 
-    monkeypatch.setattr("codeatrium.adapters.model.registry.discover", _fake_discover)
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
 def test_init_ready_clients_default_selection_is_ollama_ft(tmp_path, monkeypatch):
@@ -954,7 +954,7 @@ def test_init_ready_clients_default_selection_is_ollama_ft(tmp_path, monkeypatch
     assert result.exit_code == 0
     assert "(recommended)" in result.output
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "ollama-ft"' in config
 
 
@@ -967,7 +967,7 @@ def test_init_select_claude_cli_from_ready_list(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init"], input="2\n")
     assert result.exit_code == 0
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "claude-cli"' in config
 
 
@@ -979,7 +979,7 @@ def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
 
     setup_called = []
     monkeypatch.setattr(
-        "codeatrium.adapters.model.registry.setup",
+        "lociaction.adapters.model.registry.setup",
         lambda client_id: setup_called.append(client_id) or (True, "ok"),
     )
 
@@ -988,7 +988,7 @@ def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
     assert setup_called == []
     assert "Set up Ollama" not in result.output
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert '\nclient = "' not in config
 
 
@@ -996,7 +996,7 @@ def test_init_distill_client_flag_ready_writes_config_without_prompt(
     tmp_path, monkeypatch
 ):
     """--distill-client で明示指定し Ready なら対話なしで config に書かれる"""
-    from codeatrium.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
@@ -1009,7 +1009,7 @@ def test_init_distill_client_flag_ready_writes_config_without_prompt(
         label="Claude CLI",
     )
     monkeypatch.setattr(
-        "codeatrium.adapters.model.registry.check_ready",
+        "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
             id="claude-cli",
             label="Claude CLI",
@@ -1022,7 +1022,7 @@ def test_init_distill_client_flag_ready_writes_config_without_prompt(
     result = runner.invoke(app, ["init", "--distill-client", "claude-cli"])
     assert result.exit_code == 0
 
-    config = (tmp_path / ".codeatrium" / "config.toml").read_text()
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "claude-cli"' in config
 
 
@@ -1030,13 +1030,13 @@ def test_init_distill_client_flag_not_ready_errors_without_fallback(
     tmp_path, monkeypatch
 ):
     """--distill-client が Ready でなければ別 client に落とさずエラー終了する"""
-    from codeatrium.adapters.model.types import ClientStatus
+    from lociaction.adapters.model.types import ClientStatus
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
     monkeypatch.setattr(
-        "codeatrium.adapters.model.registry.check_ready",
+        "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
             id="ollama-ft",
             label="Ollama (local FT model)",
@@ -1047,7 +1047,7 @@ def test_init_distill_client_flag_not_ready_errors_without_fallback(
 
     result = runner.invoke(app, ["init", "--distill-client", "ollama-ft"])
     assert result.exit_code == 1
-    assert not (tmp_path / ".codeatrium" / "memory.db").exists()
+    assert not (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 def test_init_distill_client_flag_unknown_id_errors(tmp_path, monkeypatch):

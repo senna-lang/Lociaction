@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codeatrium.paths import find_project_root
+from lociaction.paths import find_project_root
 
 
 def _mock_git_root(monkeypatch, root):
     """git_root() を固定値返却にモックする（テスト中は実 git を呼ばない）"""
-    monkeypatch.setattr("codeatrium.paths.git_root", lambda: root)
+    monkeypatch.setattr("lociaction.paths.git_root", lambda: root)
 
 
 def test_find_project_root_uses_cwd_when_initialized(tmp_path, monkeypatch, capsys):
-    """cwd 直下に .codeatrium/ がある場合は cwd を返し、通知を出さない"""
-    (tmp_path / ".codeatrium").mkdir()
+    """cwd 直下に .lociaction/ がある場合は cwd を返し、通知を出さない"""
+    (tmp_path / ".lociaction").mkdir()
     _mock_git_root(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
 
@@ -26,8 +26,8 @@ def test_find_project_root_uses_cwd_when_initialized(tmp_path, monkeypatch, caps
 
 
 def test_find_project_root_walks_to_parent_with_notice(tmp_path, monkeypatch, capsys):
-    """サブディレクトリで実行時、親の .codeatrium/ を拾った場合は stderr に通知"""
-    (tmp_path / ".codeatrium").mkdir()
+    """サブディレクトリで実行時、親の .lociaction/ を拾った場合は stderr に通知"""
+    (tmp_path / ".lociaction").mkdir()
     sub = tmp_path / "sub"
     sub.mkdir()
     _mock_git_root(monkeypatch, tmp_path)
@@ -45,7 +45,7 @@ def test_find_project_root_notify_false_suppresses_notice(
     tmp_path, monkeypatch, capsys
 ):
     """notify=False で親通知を抑止できる"""
-    (tmp_path / ".codeatrium").mkdir()
+    (tmp_path / ".lociaction").mkdir()
     sub = tmp_path / "sub"
     sub.mkdir()
     _mock_git_root(monkeypatch, tmp_path)
@@ -61,7 +61,7 @@ def test_find_project_root_notify_false_suppresses_notice(
 def test_find_project_root_uninitialized_returns_git_root_silently(
     tmp_path, monkeypatch, capsys
 ):
-    """git 内で .codeatrium/ が見つからない場合は git root を返し、通知も出さない
+    """git 内で .lociaction/ が見つからない場合は git root を返し、通知も出さない
 
     （呼び出し側が db.exists() で "Not initialized" を出す責務を持つ）
     """
@@ -78,9 +78,9 @@ def test_find_project_root_uninitialized_returns_git_root_silently(
 
 
 def test_find_project_root_does_not_cross_git_root(tmp_path, monkeypatch, capsys):
-    """別プロジェクト（git root 外）の .codeatrium/ は拾わない"""
-    # 親（git 管理外）に .codeatrium/ を配置
-    (tmp_path / ".codeatrium").mkdir()
+    """別プロジェクト（git root 外）の .lociaction/ は拾わない"""
+    # 親（git 管理外）に .lociaction/ を配置
+    (tmp_path / ".lociaction").mkdir()
 
     # 子に独立した git リポジトリ
     inner = tmp_path / "inner_repo"
@@ -91,7 +91,7 @@ def test_find_project_root_does_not_cross_git_root(tmp_path, monkeypatch, capsys
     root = find_project_root()
     captured = capsys.readouterr()
 
-    # inner の git root が返り、外の .codeatrium/ は無視される
+    # inner の git root が返り、外の .lociaction/ は無視される
     assert root == inner
     assert "parent directory" not in captured.err
 
@@ -100,7 +100,7 @@ def test_find_project_root_non_git_does_not_walk_parent(
     tmp_path, monkeypatch, capsys
 ):
     """git 外のサブディレクトリでは親探索しない"""
-    (tmp_path / ".codeatrium").mkdir()
+    (tmp_path / ".lociaction").mkdir()
     sub = tmp_path / "sub"
     sub.mkdir()
 
@@ -110,7 +110,7 @@ def test_find_project_root_non_git_does_not_walk_parent(
     root = find_project_root()
     captured = capsys.readouterr()
 
-    # cwd を返す（親の .codeatrium/ は拾わない）
+    # cwd を返す（親の .lociaction/ は拾わない）
     assert root == sub
     assert captured.err == ""
 
@@ -121,7 +121,7 @@ def test_resolve_grok_sessions_path_percent_encodes_project_root(
     """grok は cwd の絶対パスを percent-encode（`/` も `%2F`）したディレクトリ名を使う。"""
     from urllib.parse import quote
 
-    from codeatrium.paths import resolve_grok_sessions_path
+    from lociaction.paths import resolve_grok_sessions_path
 
     home = tmp_path / "home"
     project_root = tmp_path / "work" / "myrepo"
@@ -137,7 +137,7 @@ def test_resolve_grok_sessions_path_returns_none_for_unknown_project(
     tmp_path: Path, monkeypatch
 ) -> None:
     """セッションが無いプロジェクトでは None を返す（誤って別プロジェクトを拾わない）。"""
-    from codeatrium.paths import resolve_grok_sessions_path
+    from lociaction.paths import resolve_grok_sessions_path
 
     home = tmp_path / "home"
     (home / ".grok" / "sessions").mkdir(parents=True)
@@ -150,14 +150,14 @@ def test_find_project_root_resolves_symlinked_cwd_before_comparing_to_git_root(
     tmp_path, monkeypatch, capsys
 ):
     """symlink 配下の cwd でも resolve() してから git_root() と比較するため、
-    break 条件 `p == root` が成立し、リポジトリ外の `.codeatrium/` を拾わない。
+    break 条件 `p == root` が成立し、リポジトリ外の `.lociaction/` を拾わない。
 
     実 OS の os.getcwd() は通常シンボリックリンクを解決済みで返すため、ここでは
     バグを意図的に再現するために Path.cwd() を未解決のシンボリックリンクパスに
     差し替える（issue #27）。
     """
-    # 別プロジェクト（git リポジトリ外）の .codeatrium/
-    (tmp_path / ".codeatrium").mkdir()
+    # 別プロジェクト（git リポジトリ外）の .lociaction/
+    (tmp_path / ".lociaction").mkdir()
 
     real_repo = tmp_path / "real_repo"
     real_repo.mkdir()
@@ -188,7 +188,7 @@ def test_resolve_claude_projects_path_folds_non_alnum_like_claude_does(
     """
     import re
 
-    from codeatrium.paths import resolve_claude_projects_path
+    from lociaction.paths import resolve_claude_projects_path
 
     claude_projects = tmp_path / "claude_projects"
     project_root = tmp_path / "work" / "my.repo.v1"
@@ -199,7 +199,7 @@ def test_resolve_claude_projects_path_folds_non_alnum_like_claude_does(
     session_dir.mkdir(parents=True)
     (session_dir / "session.jsonl").write_text("{}\n")
 
-    monkeypatch.setattr("codeatrium.paths.CLAUDE_PROJECTS_DIR", claude_projects)
+    monkeypatch.setattr("lociaction.paths.CLAUDE_PROJECTS_DIR", claude_projects)
 
     assert resolve_claude_projects_path(project_root) == session_dir
 
@@ -212,16 +212,16 @@ def test_loci_bin_prefers_venv_binary_when_present(
     tmp_path: Path, monkeypatch
 ) -> None:
     """venv 配下に loci が存在する場合はそれを優先する（PATH 非依存の従来動作を維持）。"""
-    from codeatrium.paths import loci_bin
+    from lociaction.paths import loci_bin
 
     fake_python = tmp_path / "venv" / "bin" / "python3"
     fake_python.parent.mkdir(parents=True)
     venv_loci = fake_python.parent / "loci"
     venv_loci.write_text("#!/bin/sh\n")
 
-    monkeypatch.setattr("codeatrium.paths.sys.executable", str(fake_python))
+    monkeypatch.setattr("lociaction.paths.sys.executable", str(fake_python))
     monkeypatch.setattr(
-        "codeatrium.paths.shutil.which", lambda name: "/should/not/be/used"
+        "lociaction.paths.shutil.which", lambda name: "/should/not/be/used"
     )
 
     assert loci_bin() == str(venv_loci)
@@ -233,7 +233,7 @@ def test_loci_bin_falls_back_to_which_under_pipx_install(
     """venv 配下に loci が無い場合（pipx/global インストール）、
     shutil.which("loci") にフォールバックする（issue #27）。
     """
-    from codeatrium.paths import loci_bin
+    from lociaction.paths import loci_bin
 
     fake_python = tmp_path / "some_venv" / "bin" / "python3"
     fake_python.parent.mkdir(parents=True)
@@ -241,9 +241,9 @@ def test_loci_bin_falls_back_to_which_under_pipx_install(
     global_loci.parent.mkdir(parents=True)
     global_loci.write_text("#!/bin/sh\n")
 
-    monkeypatch.setattr("codeatrium.paths.sys.executable", str(fake_python))
+    monkeypatch.setattr("lociaction.paths.sys.executable", str(fake_python))
     monkeypatch.setattr(
-        "codeatrium.paths.shutil.which",
+        "lociaction.paths.shutil.which",
         lambda name: str(global_loci) if name == "loci" else None,
     )
 
@@ -260,7 +260,7 @@ def test_loci_bin_normalizes_relative_which_result_to_absolute(
     ため、相対パスのままだと後で別の cwd から実行された際に解決先が変わる、
     または解決できず失敗する（issue #27 レビュー指摘）。
     """
-    from codeatrium.paths import loci_bin
+    from lociaction.paths import loci_bin
 
     fake_python = tmp_path / "some_venv" / "bin" / "python3"
     fake_python.parent.mkdir(parents=True)
@@ -270,9 +270,9 @@ def test_loci_bin_normalizes_relative_which_result_to_absolute(
     real_loci = project_dir / "loci"
     real_loci.write_text("#!/bin/sh\n")
 
-    monkeypatch.setattr("codeatrium.paths.sys.executable", str(fake_python))
+    monkeypatch.setattr("lociaction.paths.sys.executable", str(fake_python))
     # PATH に "." が含まれる場合の shutil.which の典型的な戻り値を模倣する
-    monkeypatch.setattr("codeatrium.paths.shutil.which", lambda name: "loci")
+    monkeypatch.setattr("lociaction.paths.shutil.which", lambda name: "loci")
     monkeypatch.chdir(project_dir)
 
     result = loci_bin()
@@ -287,13 +287,13 @@ def test_loci_bin_warns_when_unresolved(
     """venv にも PATH にも loci が見つからない場合、stderr に警告しつつ
     従来の venv パスをフォールバックとして返す（issue #27）。
     """
-    from codeatrium.paths import loci_bin
+    from lociaction.paths import loci_bin
 
     fake_python = tmp_path / "some_venv" / "bin" / "python3"
     fake_python.parent.mkdir(parents=True)
 
-    monkeypatch.setattr("codeatrium.paths.sys.executable", str(fake_python))
-    monkeypatch.setattr("codeatrium.paths.shutil.which", lambda name: None)
+    monkeypatch.setattr("lociaction.paths.sys.executable", str(fake_python))
+    monkeypatch.setattr("lociaction.paths.shutil.which", lambda name: None)
 
     result = loci_bin()
     captured = capsys.readouterr()

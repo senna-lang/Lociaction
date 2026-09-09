@@ -1,7 +1,7 @@
 """標準 unified diff を共有の行範囲・変更量へ正規化する契約を検証する。"""
 
-from codeatrium.adapters.harness.unified_diff import parse_unified_diff
-from codeatrium.models import LineRange
+from lociaction.adapters.harness.unified_diff import parse_unified_diff
+from lociaction.models import LineRange
 
 
 def test_parse_unified_diff_extracts_each_hunk_and_change_counts() -> None:

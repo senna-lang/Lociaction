@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from codeatrium.adapters.harness.hook_writers import (
+from lociaction.adapters.harness.hook_writers import (
     DEDICATED_FILE_MARKER,
     DedicatedFileWriter,
     MergedJsonEvent,
@@ -173,7 +173,7 @@ def test_merged_json_install_malformed_json_raises_actionable_error(
     target = tmp_path / "hooks.json"
     target.write_text("{not valid json")
 
-    from codeatrium.hooks import SettingsLoadError
+    from lociaction.hooks import SettingsLoadError
 
     with pytest.raises(SettingsLoadError, match="invalid JSON"):
         _writer().install(target)
@@ -187,7 +187,7 @@ def test_merged_json_uninstall_malformed_json_raises_actionable_error(
     target = tmp_path / "hooks.json"
     target.write_text("{not valid json")
 
-    from codeatrium.hooks import SettingsLoadError
+    from lociaction.hooks import SettingsLoadError
 
     with pytest.raises(SettingsLoadError, match="invalid JSON"):
         _writer().uninstall(target)
@@ -203,7 +203,7 @@ def _render(marker: str = DEDICATED_FILE_MARKER) -> str:
 
 
 def test_dedicated_file_install_writes_new_file(tmp_path: Path) -> None:
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
 
     changed, message = writer.install(commands=object())  # type: ignore[arg-type]
@@ -215,7 +215,7 @@ def test_dedicated_file_install_writes_new_file(tmp_path: Path) -> None:
 
 
 def test_dedicated_file_install_is_idempotent(tmp_path: Path) -> None:
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
     writer.install(commands=object())  # type: ignore[arg-type]
 
@@ -229,7 +229,7 @@ def test_dedicated_file_install_refuses_to_overwrite_unmanaged_file(
     tmp_path: Path,
 ) -> None:
     """マーカーの無い既存ファイルは他ツール/ユーザー製とみなし上書きしない。"""
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     target.parent.mkdir(parents=True)
     target.write_text("// someone else's file\n")
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
@@ -237,12 +237,12 @@ def test_dedicated_file_install_refuses_to_overwrite_unmanaged_file(
     changed, message = writer.install(commands=object())  # type: ignore[arg-type]
 
     assert changed is False
-    assert "not managed by codeatrium" in message
+    assert "not managed by lociaction" in message
     assert target.read_text() == "// someone else's file\n"
 
 
 def test_dedicated_file_uninstall_removes_marker_owned_file(tmp_path: Path) -> None:
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
     writer.install(commands=object())  # type: ignore[arg-type]
 
@@ -256,7 +256,7 @@ def test_dedicated_file_uninstall_refuses_to_delete_unmanaged_file(
     tmp_path: Path,
 ) -> None:
     """マーカーの無いファイルは uninstall でも削除しない（issue #28 の誤削除対策）。"""
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     target.parent.mkdir(parents=True)
     target.write_text("// someone else's file, name collides with ours\n")
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
@@ -264,12 +264,12 @@ def test_dedicated_file_uninstall_refuses_to_delete_unmanaged_file(
     changed, message = writer.uninstall()
 
     assert changed is False
-    assert "not managed by codeatrium" in message
+    assert "not managed by lociaction" in message
     assert target.exists()
 
 
 def test_dedicated_file_uninstall_missing_file_is_noop(tmp_path: Path) -> None:
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: _render())
 
     changed, message = writer.uninstall()
@@ -279,7 +279,7 @@ def test_dedicated_file_uninstall_missing_file_is_noop(tmp_path: Path) -> None:
 
 
 def test_dedicated_file_install_rejects_render_missing_marker(tmp_path: Path) -> None:
-    target = tmp_path / "ext" / "codeatrium.ts"
+    target = tmp_path / "ext" / "lociaction.ts"
     writer = DedicatedFileWriter("test-harness", target, lambda _cmds: "no marker here")
 
     with pytest.raises(AssertionError):

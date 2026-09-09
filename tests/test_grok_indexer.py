@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.indexer import index_file, parse_grok_exchanges
+from lociaction.db import get_connection, init_db
+from lociaction.indexer import index_file, parse_grok_exchanges
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "grok.jsonl"
 
@@ -37,7 +37,7 @@ def test_index_file_records_grok_touches_as_file_granularity(tmp_path: Path) -> 
 
     session = tmp_path / "updates.jsonl"
     _write_session(session, project_root)
-    db_path = project_root / ".codeatrium" / "memory.db"
+    db_path = project_root / ".lociaction" / "memory.db"
     init_db(db_path)
 
     indexed = index_file(
@@ -69,7 +69,7 @@ def test_index_file_grok_is_incremental(tmp_path: Path) -> None:
     """同じセッションを再実行しても exchange を重複登録しない。"""
     session = tmp_path / "updates.jsonl"
     _write_session(session, tmp_path)
-    db_path = tmp_path / ".codeatrium" / "memory.db"
+    db_path = tmp_path / ".lociaction" / "memory.db"
     init_db(db_path)
 
     assert index_file(session, db_path, min_chars=1, harness="grok") == 1

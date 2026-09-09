@@ -12,19 +12,19 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection
-from codeatrium.eval.adapters.symbol import SymbolAdapter
-from codeatrium.eval.datasets.schema import Query
-from codeatrium.eval.fixture import build_symbol_recall_fixture
-from codeatrium.eval.gate import (
+from lociaction.cli import app
+from lociaction.db import get_connection
+from lociaction.eval.adapters.symbol import SymbolAdapter
+from lociaction.eval.datasets.schema import Query
+from lociaction.eval.fixture import build_symbol_recall_fixture
+from lociaction.eval.gate import (
     DEFAULT_TOLERANCE_ABS,
     Baseline,
     compare_to_baseline,
     load_baseline,
 )
-from codeatrium.eval.report import AdapterScore, score_runs
-from codeatrium.eval.runner import run_adapters
+from lociaction.eval.report import AdapterScore, score_runs
+from lociaction.eval.runner import run_adapters
 
 runner = CliRunner()
 
@@ -207,7 +207,7 @@ def test_eval_gate_cli_fails_when_current_regresses(tmp_path: Path, monkeypatch)
             mrr_at_10=0.0,
         )
 
-    monkeypatch.setattr("codeatrium.cli.eval_cmd._score_fixture_run", _regressed)
+    monkeypatch.setattr("lociaction.cli.eval_cmd._score_fixture_run", _regressed)
     result = runner.invoke(app, ["eval", "gate", "--baseline", str(baseline), "--json"])
     assert result.exit_code != 0
     payload = json.loads(result.stdout or result.output)

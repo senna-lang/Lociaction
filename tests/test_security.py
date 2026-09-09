@@ -17,9 +17,9 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import init_db
-from codeatrium.hooks import install_hooks
+from lociaction.cli import app
+from lociaction.db import init_db
+from lociaction.hooks import install_hooks
 
 runner = CliRunner()
 
@@ -29,13 +29,13 @@ runner = CliRunner()
 def test_hooks_quotes_loci_path_with_spaces() -> None:
     """パスにスペースを含む場合、shlex.quote でエスケープされる"""
     fake_path = "/Users/test user/venvs/my env/bin/loci"
-    # loci_bin の実際の呼び出し元は lifecycle_commands()（codeatrium.hooks はそれを
+    # loci_bin の実際の呼び出し元は lifecycle_commands()（lociaction.hooks はそれを
     # 消費するだけ）に一元化された（issue #40）。
     with patch(
-        "codeatrium.adapters.harness.lifecycle.loci_bin", return_value=fake_path
+        "lociaction.adapters.harness.lifecycle.loci_bin", return_value=fake_path
     ):
-        with patch("codeatrium.hooks.Path") as mock_path_cls:
-            with patch("codeatrium.hooks._write_settings"):
+        with patch("lociaction.hooks.Path") as mock_path_cls:
+            with patch("lociaction.hooks._write_settings"):
                 mock_settings = mock_path_cls.home.return_value / ".claude" / "settings.json"
                 mock_settings.exists.return_value = False
                 _, msg = install_hooks()
@@ -46,11 +46,11 @@ def test_hooks_quotes_loci_path_with_spaces() -> None:
 def test_hooks_batch_limit_cast_to_int() -> None:
     """batch_limit が int にキャストされることを確認"""
     with patch(
-        "codeatrium.adapters.harness.lifecycle.loci_bin",
+        "lociaction.adapters.harness.lifecycle.loci_bin",
         return_value="/usr/bin/loci",
     ):
-        with patch("codeatrium.hooks.Path") as mock_path_cls:
-            with patch("codeatrium.hooks._write_settings"):
+        with patch("lociaction.hooks.Path") as mock_path_cls:
+            with patch("lociaction.hooks._write_settings"):
                 mock_settings = mock_path_cls.home.return_value / ".claude" / "settings.json"
                 mock_settings.exists.return_value = False
                 _, msg = install_hooks(batch_limit=20)
@@ -66,8 +66,8 @@ def test_distill_all_limit_parameterized(tmp_path: Path) -> None:
 
     import numpy as np
 
-    from codeatrium.db import get_connection, init_db
-    from codeatrium.distiller import distill_all
+    from lociaction.db import get_connection, init_db
+    from lociaction.distiller import distill_all
 
     db_path = tmp_path / "memory.db"
     init_db(db_path)
@@ -95,8 +95,8 @@ def test_distill_all_limit_parameterized(tmp_path: Path) -> None:
     mock_embedder.embed_passage.return_value = np.zeros(384, dtype=np.float32)
 
     with (
-        patch("codeatrium.distiller.call_claude", return_value=mock_response),
-        patch("codeatrium.distiller.Embedder", return_value=mock_embedder),
+        patch("lociaction.distiller.call_claude", return_value=mock_response),
+        patch("lociaction.distiller.Embedder", return_value=mock_embedder),
     ):
         count, _ = distill_all(db_path, limit=1)
 
@@ -112,7 +112,7 @@ def test_embedder_server_socket_permissions() -> None:
     import tempfile
     import threading
 
-    from codeatrium.embedder_server import run_server
+    from lociaction.embedder_server import run_server
 
     # AF_UNIX パス長制限 (104 bytes on macOS) を回避するため短いパスを使う
     tmpdir = Path(tempfile.mkdtemp(prefix="loci"))
@@ -143,7 +143,7 @@ def test_embedder_server_socket_permissions() -> None:
     t.start()
 
     # _load_embedder をモックしてモデルロードを回避
-    with patch("codeatrium.embedder_server._load_embedder") as mock_load:
+    with patch("lociaction.embedder_server._load_embedder") as mock_load:
         from unittest.mock import MagicMock
 
         mock_embedder = MagicMock()
@@ -180,11 +180,11 @@ def test_distill_lock_atomic_creation(tmp_path: Path) -> None:
 
 def test_distill_lock_already_running_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
     """A manual distill invocation must report lock contention as a failure."""
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir(parents=True)
-    init_db(codeatrium_dir / "memory.db")
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir(parents=True)
+    init_db(lociaction_dir / "memory.db")
 
-    lock_path = codeatrium_dir / "distill.lock"
+    lock_path = lociaction_dir / "distill.lock"
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 

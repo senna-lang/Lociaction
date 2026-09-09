@@ -7,9 +7,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.db import get_connection, init_db
-from codeatrium.eval.datasets.schema import Query, dump_dataset
+from lociaction.cli import app
+from lociaction.db import get_connection, init_db
+from lociaction.eval.datasets.schema import Query, dump_dataset
 from tests.conftest import run_git
 
 runner = CliRunner()
@@ -17,7 +17,7 @@ runner = CliRunner()
 
 def _init_project(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     init_db(db)
     return db
 
@@ -54,7 +54,7 @@ def test_eval_run_reports_symbol_adapter_in_json(tmp_path, monkeypatch):
         [Query(id="q1", kind="symbol", value="src/foo.py::list_dir", gold_exchange_ids=("ex1",))],
         dataset_path,
     )
-    monkeypatch.setattr("codeatrium.eval.datasets.schema.DATASETS_DIR", dataset_path.parent)
+    monkeypatch.setattr("lociaction.eval.datasets.schema.DATASETS_DIR", dataset_path.parent)
 
     result = runner.invoke(
         app, ["eval", "run", "--dataset", "symbol-recall", "--adapter", "symbol", "--json"]
@@ -71,7 +71,7 @@ def test_eval_run_missing_dataset_file_exits_nonzero(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _init_project(tmp_path)
     monkeypatch.setattr(
-        "codeatrium.eval.datasets.schema.DATASETS_DIR", tmp_path / "empty-datasets"
+        "lociaction.eval.datasets.schema.DATASETS_DIR", tmp_path / "empty-datasets"
     )
 
     result = runner.invoke(app, ["eval", "run", "--dataset", "symbol-recall"])
@@ -89,7 +89,7 @@ def test_eval_run_unknown_adapter_exits_nonzero(tmp_path, monkeypatch):
         [Query(id="q1", kind="symbol", value="src/foo.py::list_dir", gold_exchange_ids=("ex1",))],
         dataset_path,
     )
-    monkeypatch.setattr("codeatrium.eval.datasets.schema.DATASETS_DIR", dataset_path.parent)
+    monkeypatch.setattr("lociaction.eval.datasets.schema.DATASETS_DIR", dataset_path.parent)
 
     result = runner.invoke(app, ["eval", "run", "--dataset", "symbol-recall", "--adapter", "bogus"])
 
@@ -130,7 +130,7 @@ def test_eval_gen_writes_symbol_recall_dataset(tmp_path, monkeypatch):
     run_git(tmp_path, "add", ".")
     run_git(tmp_path, "commit", "-m", "initial")
 
-    db = tmp_path / ".codeatrium" / "memory.db"
+    db = tmp_path / ".lociaction" / "memory.db"
     init_db(db)
     con = get_connection(db)
     con.execute("INSERT INTO conversations (id, source_path) VALUES ('c1', '/p')")
@@ -149,7 +149,7 @@ def test_eval_gen_writes_symbol_recall_dataset(tmp_path, monkeypatch):
     con.close()
 
     out_dir = tmp_path / "datasets"
-    monkeypatch.setattr("codeatrium.eval.datasets.schema.DATASETS_DIR", out_dir)
+    monkeypatch.setattr("lociaction.eval.datasets.schema.DATASETS_DIR", out_dir)
 
     result = runner.invoke(app, ["eval", "gen", "--dataset", "symbol-recall"])
 
@@ -172,7 +172,7 @@ def test_eval_report_delegates_to_run_with_all_adapters_markdown(tmp_path, monke
     def _fake_eval_run(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("codeatrium.cli.eval_cmd.eval_run", _fake_eval_run)
+    monkeypatch.setattr("lociaction.cli.eval_cmd.eval_run", _fake_eval_run)
 
     result = runner.invoke(app, ["eval", "report", "--dataset", "symbol-recall"])
 

@@ -11,9 +11,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from codeatrium.cli import app
-from codeatrium.cli.search_cmd import _semantic_query_text
-from codeatrium.db import get_connection, init_db
+from lociaction.cli import app
+from lociaction.cli.search_cmd import _semantic_query_text
+from lociaction.db import get_connection, init_db
 
 runner = CliRunner()
 
@@ -21,9 +21,9 @@ LONG = "x" * 200
 
 
 def _setup(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
-    codeatrium_dir = tmp_path / ".codeatrium"
-    codeatrium_dir.mkdir()
-    db = codeatrium_dir / "memory.db"
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    db = lociaction_dir / "memory.db"
     init_db(db)
     con = get_connection(db)
     return db, con
@@ -172,7 +172,7 @@ def test_context_symbol_has_git_branch_field(tmp_path, monkeypatch):
 def test_search_json_has_git_branch_field(tmp_path, monkeypatch):
     from unittest.mock import MagicMock, patch
 
-    from codeatrium.models import FusedResult
+    from lociaction.models import FusedResult
 
     monkeypatch.chdir(tmp_path)
     db, con = _setup(tmp_path)
@@ -195,8 +195,8 @@ def test_search_json_has_git_branch_field(tmp_path, monkeypatch):
 
     # Embedder の実体はモデルロードが走り出力を汚すためモックする
     with (
-        patch("codeatrium.embedder.Embedder", return_value=MagicMock()),
-        patch("codeatrium.search.search_combined", return_value=[mock_result]),
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[mock_result]),
     ):
         result = runner.invoke(app, ["search", "test query", "--json"])
         assert result.exit_code == 0
@@ -209,7 +209,7 @@ def test_search_json_includes_result_score(tmp_path, monkeypatch):
     """Agents can apply confidence thresholds to machine-readable search results."""
     from unittest.mock import MagicMock, patch
 
-    from codeatrium.models import FusedResult
+    from lociaction.models import FusedResult
 
     monkeypatch.chdir(tmp_path)
     db, con = _setup(tmp_path)
@@ -229,8 +229,8 @@ def test_search_json_includes_result_score(tmp_path, monkeypatch):
     )
 
     with (
-        patch("codeatrium.embedder.Embedder", return_value=MagicMock()),
-        patch("codeatrium.search.search_combined", return_value=[mock_result]),
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[mock_result]),
     ):
         result = runner.invoke(app, ["search", "test query", "--json"])
 
@@ -253,7 +253,7 @@ def test_context_closes_connection_when_symbol_query_fails(tmp_path, monkeypatch
     con.close()
     failing_connection = FailingConnection()
     monkeypatch.setattr(
-        "codeatrium.db.get_connection", lambda _db: failing_connection
+        "lociaction.db.get_connection", lambda _db: failing_connection
     )
 
     result = runner.invoke(app, ["context", "--symbol", "MyFunc"])
@@ -277,7 +277,7 @@ def test_context_closes_connection_when_target_resolution_fails(tmp_path, monkey
     con.close()
     failing_connection = FailingConnection()
     monkeypatch.setattr(
-        "codeatrium.db.get_connection", lambda _db: failing_connection
+        "lociaction.db.get_connection", lambda _db: failing_connection
     )
 
     result = runner.invoke(app, ["context", "src/foo.py"])
@@ -291,7 +291,7 @@ def test_search_json_has_exchange_id_field(tmp_path, monkeypatch):
     traversal に入れない（PRIME_TEXT の show 例が指す先）"""
     from unittest.mock import MagicMock, patch
 
-    from codeatrium.models import FusedResult
+    from lociaction.models import FusedResult
 
     monkeypatch.chdir(tmp_path)
     db, con = _setup(tmp_path)
@@ -311,8 +311,8 @@ def test_search_json_has_exchange_id_field(tmp_path, monkeypatch):
     )
 
     with (
-        patch("codeatrium.embedder.Embedder", return_value=MagicMock()),
-        patch("codeatrium.search.search_combined", return_value=[mock_result]),
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[mock_result]),
     ):
         result = runner.invoke(app, ["search", "test query", "--json"])
         assert result.exit_code == 0
@@ -479,7 +479,7 @@ def test_context_positional_target_takes_precedence_over_symbol_flag(
 def test_context_u1_no_edges_falls_back_to_semantic(tmp_path, monkeypatch):
     from unittest.mock import MagicMock, patch
 
-    from codeatrium.models import FusedResult
+    from lociaction.models import FusedResult
 
     monkeypatch.chdir(tmp_path)
     db, con = _setup(tmp_path)
@@ -499,8 +499,8 @@ def test_context_u1_no_edges_falls_back_to_semantic(tmp_path, monkeypatch):
     )
 
     with (
-        patch("codeatrium.embedder.Embedder", return_value=MagicMock()),
-        patch("codeatrium.search.search_combined", return_value=[mock_result]),
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[mock_result]),
     ):
         result = runner.invoke(app, ["context", "src/nomatch.py:missing", "--json"])
         assert result.exit_code == 0
@@ -517,8 +517,8 @@ def test_context_no_results_at_all(tmp_path, monkeypatch):
     con.close()
 
     with (
-        patch("codeatrium.embedder.Embedder", return_value=MagicMock()),
-        patch("codeatrium.search.search_combined", return_value=[]),
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[]),
     ):
         result = runner.invoke(app, ["context", "src/nomatch.py:missing"])
         assert result.exit_code == 0
@@ -548,13 +548,13 @@ def test_context_u1_line_miss_falls_back_to_u2(tmp_path, monkeypatch):
 
 
 def test_semantic_query_text_u1_includes_symbol_and_module_stem():
-    text = _semantic_query_text("src/codeatrium/config.py", "Config")
+    text = _semantic_query_text("src/lociaction/config.py", "Config")
     assert "Config" in text
     assert "config" in text
     assert ".py" not in text
 
 
 def test_semantic_query_text_u2_includes_module_stem_and_path():
-    text = _semantic_query_text("src/codeatrium/config.py", None)
+    text = _semantic_query_text("src/lociaction/config.py", None)
     assert "config" in text
-    assert "src/codeatrium/config.py" in text
+    assert "src/lociaction/config.py" in text

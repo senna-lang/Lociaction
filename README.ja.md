@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="codeatrium — 2コマンドですべてを recall: AIコーディングエージェントのためのミニマルな記憶レイヤー" width="100%">
+  <img src="assets/banner.svg" alt="lociaction — 2コマンドですべてを recall: AIコーディングエージェントのためのミニマルな記憶レイヤー" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/senna-lang/Codeatrium/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/Codeatrium/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pypi.org/project/codeatrium/"><img src="https://img.shields.io/pypi/v/codeatrium" alt="PyPI"></a>
+  <a href="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/Lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/lociaction/"><img src="https://img.shields.io/pypi/v/lociaction" alt="PyPI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -52,7 +52,7 @@ CLI コマンド `loci` は**エージェント自身が呼び出す**ことを�
 ## インストール
 
 ```bash
-pipx install codeatrium
+pipx install lociaction
 ```
 
 Python 3.11 以上が必要です。
@@ -83,13 +83,13 @@ loci init
 
 ## エージェント向けインストラクション
 
-`loci init` は全 harness 共通の正本である **`AGENTS.md`** に、マーカー付きセクション（`<!-- BEGIN CODEATRIUM -->...<!-- END CODEATRIUM -->`）を挿入します。`loci prime` は native lifecycle があるセッションへ詳細なコマンド利用法を注入します。
+`loci init` は全 harness 共通の正本である **`AGENTS.md`** に、マーカー付きセクション（`<!-- BEGIN LOCIACTION -->...<!-- END LOCIACTION -->`）を挿入します。`loci prime` は native lifecycle があるセッションへ詳細なコマンド利用法を注入します。
 
 ## CLI コマンド
 
 | コマンド | 説明 |
 |---------|------|
-| `loci init` | `.codeatrium/` を初期化し、共通 `AGENTS.md` 指示を追加、Claude Code フックを登録（`--no-hooks` で省略可） |
+| `loci init` | `.lociaction/` を初期化し、共通 `AGENTS.md` 指示を追加、Claude Code フックを登録（`--no-hooks` で省略可） |
 | `loci index [--harness all\|claude\|codex\|opencode\|omp-pi\|grok]` | 新しいセッションログをインデックス（既定は検出した全 harness） |
 | `loci distill [--limit N]` | 未蒸留の exchange を LLM で蒸留 |
 | `loci gc` | `memory.db` を `.bak` に安全にスナップショットし、孤立した palace/vector/session レコードだけを削除。現行 backup と直近3世代を残して `VACUUM` |
@@ -102,7 +102,7 @@ loci init
 | `loci prime` | コマンドの使い方をセッションコンテキストに注入 |
 | `loci server start/stop/status` | 埋め込みサーバー管理 |
 | `loci hook install --harness NAME` | native lifecycle hook を登録、または fallback recipe を表示 |
-| `loci hook uninstall --harness NAME` | native codeatrium lifecycle hook を削除 |
+| `loci hook uninstall --harness NAME` | native lociaction lifecycle hook を削除 |
 
 ## Harness lifecycle
 
@@ -137,7 +137,7 @@ Native hook は turn end を `loci index`、session start を `loci server start
 
 ## 設定
 
-`.codeatrium/config.toml`（`loci init` で生成）:
+`.lociaction/config.toml`（`loci init` で生成）:
 
 ```toml
 [distill]

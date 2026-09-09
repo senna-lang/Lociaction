@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from codeatrium.adapters.harness.opencode import edit_capability, extract_code_touches
-from codeatrium.models import FileOnly, LineRange, TextAnchor
+from lociaction.adapters.harness.opencode import edit_capability, extract_code_touches
+from lociaction.models import FileOnly, LineRange, TextAnchor
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "opencode.json"
 

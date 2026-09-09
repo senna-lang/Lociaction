@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from codeatrium.eval.datasets.schema import (
+from lociaction.eval.datasets.schema import (
     Query,
     dataset_path,
     dump_dataset,

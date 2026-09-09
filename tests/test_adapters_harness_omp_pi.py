@@ -8,12 +8,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from codeatrium.adapters.harness.omp_pi import (
+from lociaction.adapters.harness.omp_pi import (
     edit_capability,
     extract_code_touches,
     extract_file_renames,
 )
-from codeatrium.models import FileOnly, TextAnchor
+from lociaction.models import FileOnly, TextAnchor
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "omp_pi.jsonl"
 

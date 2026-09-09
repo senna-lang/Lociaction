@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codeatrium.db import get_connection, init_db
-from codeatrium.eval.datasets.schema import Query, RetrievalResult
-from codeatrium.eval.report import render_json, render_markdown, score_runs
-from codeatrium.eval.runner import (
+from lociaction.db import get_connection, init_db
+from lociaction.eval.datasets.schema import Query, RetrievalResult
+from lociaction.eval.report import render_json, render_markdown, score_runs
+from lociaction.eval.runner import (
     AdapterRunResult,
     CorpusStats,
     corpus_stats,
