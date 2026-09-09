@@ -1,1 +1,1 @@
-see @AGENTS.md
+[Read the canonical agent guide.](AGENTS.md)
