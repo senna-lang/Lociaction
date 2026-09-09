@@ -1,4 +1,4 @@
-# lociaction
+# Lociaction
 
 <p align="center">
   <a href="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml"><img src="https://github.com/senna-lang/lociaction/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
