@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Test & lint caches
+.pytest_cache/
+.ruff_cache/
+
+# Tool data (local only)
+.codeatrium/
+.logosyncx/
+
+# Claude Code local settings
+.claude/
+
+# Internal docs (local only, not part of the public OSS repo)
+docs/internal/
+docs/design/
+.strata/
+
+# OS
+.DS_Store

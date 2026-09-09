@@ -1,0 +1,254 @@
+"""OpenCode session DB を exchange・code edge へ取り込む契約を検証する。
+
+opencode.json（README 参照）は project/session/messages/parts テーブル行を JSON で
+手書きしたもの。ここでは実際に SQLite ファイルへ書き戻し、index_opencode_db が
+本物の DB スキーマ・SQL 経由で読めることを確認する（JSON を直接渡すテストでは
+クエリや並び順のバグを検出できないため）。
+"""
+
+import json
+import sqlite3
+from pathlib import Path
+
+from codeatrium.db import get_connection, init_db
+from codeatrium.indexer import index_opencode_db
+
+_FIXTURE = Path(__file__).parent / "fixtures" / "harness_logs" / "opencode.json"
+
+
+def _write_opencode_db(db_file: Path, project_root: Path) -> None:
+    """合成ログの /repo を一時プロジェクトの絶対パスへ置き換えて SQLite に書き出す。"""
+    fixture = json.loads(_FIXTURE.read_text().replace("/repo", str(project_root)))
+
+    con = sqlite3.connect(db_file)
+    con.executescript(
+        """
+        CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL, vcs TEXT, name TEXT);
+        CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, directory TEXT NOT NULL);
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+            time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+            time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        """
+    )
+    project = fixture["project"]
+    con.execute(
+        "INSERT INTO project (id, worktree, vcs, name) VALUES (?, ?, ?, ?)",
+        (project["id"], project["worktree"], project["vcs"], project["name"]),
+    )
+    session = fixture["session"]
+    con.execute(
+        "INSERT INTO session (id, project_id, directory) VALUES (?, ?, ?)",
+        (session["id"], session["project_id"], session["directory"]),
+    )
+    for message in fixture["messages"]:
+        con.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                message["id"],
+                message["session_id"],
+                message["time_created"],
+                message["time_created"],
+                json.dumps(message["data"]),
+            ),
+        )
+    for part in fixture["parts"]:
+        con.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                part["id"],
+                part["message_id"],
+                part["session_id"],
+                part["time_created"],
+                part["time_created"],
+                json.dumps(part["data"]),
+            ),
+        )
+    con.commit()
+    con.close()
+
+
+def test_index_opencode_db_indexes_touches_and_edges(tmp_path: Path) -> None:
+    """project.worktree が project_root に一致するセッションだけを取り込む。"""
+    project_root = tmp_path / "project"
+    source_dir = project_root / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "fs.py").write_text("def list_dir(path):\n    return path\n")
+    (source_dir / "result.py").write_text("class Result:\n    pass\n")
+
+    opencode_db = tmp_path / "opencode.db"
+    _write_opencode_db(opencode_db, project_root)
+    db_path = project_root / ".codeatrium" / "memory.db"
+    init_db(db_path)
+
+    indexed = index_opencode_db(
+        opencode_db, db_path, min_chars=1, project_root=project_root
+    )
+
+    assert indexed == 1
+    con = get_connection(db_path)
+    assert con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0] == 1
+    exchange = con.execute(
+        "SELECT user_content, agent_content FROM exchanges"
+    ).fetchone()
+    assert exchange["user_content"] == "fs.list_dir を Result 型にして"
+    assert exchange["agent_content"] == "list_dir を編集します。"
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM code_touches WHERE harness = 'opencode'"
+        ).fetchone()[0]
+        >= 2
+    )
+    assert con.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0] >= 2
+    con.close()
+
+
+def test_index_opencode_db_skips_sessions_outside_project_root(tmp_path: Path) -> None:
+    """worktree が project_root と異なるセッションは取り込まない。"""
+    other_root = tmp_path / "other-project"
+    opencode_db = tmp_path / "opencode.db"
+    _write_opencode_db(opencode_db, other_root)
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    db_path = project_root / ".codeatrium" / "memory.db"
+    init_db(db_path)
+
+    indexed = index_opencode_db(
+        opencode_db, db_path, min_chars=1, project_root=project_root
+    )
+
+    assert indexed == 0
+    con = get_connection(db_path)
+    assert con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0] == 0
+    con.close()
+
+
+def test_index_opencode_db_excludes_exchange_touching_ignored_file(tmp_path: Path) -> None:
+    """`.codeatrium/ignore` にマッチするファイルへ触れた exchange は取り込まない（issue #36）"""
+    project_root = tmp_path / "project"
+    source_dir = project_root / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "fs.py").write_text("def list_dir(path):\n    return path\n")
+    (source_dir / "result.py").write_text("class Result:\n    pass\n")
+
+    codeatrium_dir = project_root / ".codeatrium"
+    codeatrium_dir.mkdir(parents=True)
+    (codeatrium_dir / "ignore").write_text("src/*\n")
+
+    opencode_db = tmp_path / "opencode.db"
+    _write_opencode_db(opencode_db, project_root)
+    db_path = codeatrium_dir / "memory.db"
+    init_db(db_path)
+
+    indexed = index_opencode_db(
+        opencode_db, db_path, min_chars=1, project_root=project_root
+    )
+
+    assert indexed == 0
+    con = get_connection(db_path)
+    assert con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0] == 0
+    con.close()
+
+
+def test_index_opencode_db_is_incremental(tmp_path: Path) -> None:
+    """同じセッションを再実行しても exchange を重複登録しない。"""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    opencode_db = tmp_path / "opencode.db"
+    _write_opencode_db(opencode_db, project_root)
+    db_path = project_root / ".codeatrium" / "memory.db"
+    init_db(db_path)
+
+    assert (
+        index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)
+        == 1
+    )
+    assert (
+        index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)
+        == 0
+    )
+
+
+def test_index_opencode_db_parses_only_appended_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """再インデックスでは OpenCode の新規 message/part だけを復元する（issue #22）。"""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    opencode_db = tmp_path / "opencode.db"
+    _write_opencode_db(opencode_db, project_root)
+    db_path = project_root / ".codeatrium" / "memory.db"
+    init_db(db_path)
+    assert (
+        index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)
+        == 1
+    )
+
+    source = sqlite3.connect(opencode_db)
+    source.executemany(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            (
+                "msg_new_user",
+                "ses_synth1",
+                1798761610000,
+                1798761610000,
+                json.dumps({"role": "user"}),
+            ),
+            (
+                "msg_new_assistant",
+                "ses_synth1",
+                1798761611000,
+                1798761611000,
+                json.dumps({"role": "assistant"}),
+            ),
+        ],
+    )
+    source.executemany(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "prt_new_user",
+                "msg_new_user",
+                "ses_synth1",
+                1798761610100,
+                1798761610100,
+                json.dumps({"type": "text", "text": "新規の質問です。" * 10}),
+            ),
+            (
+                "prt_new_assistant",
+                "msg_new_assistant",
+                "ses_synth1",
+                1798761611100,
+                1798761611100,
+                json.dumps({"type": "text", "text": "新規の回答です。" * 10}),
+            ),
+        ],
+    )
+    source.commit()
+    source.close()
+
+    loads = json.loads
+    parse_calls = 0
+
+    def count_loads(*args, **kwargs):
+        nonlocal parse_calls
+        parse_calls += 1
+        return loads(*args, **kwargs)
+
+    monkeypatch.setattr("codeatrium.indexer.json.loads", count_loads)
+
+    assert (
+        index_opencode_db(opencode_db, db_path, min_chars=1, project_root=project_root)
+        == 1
+    )
+    assert parse_calls == 4

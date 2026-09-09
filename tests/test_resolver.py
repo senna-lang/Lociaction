@@ -1,0 +1,580 @@
+"""
+SymbolResolver のテスト
+
+tree-sitter で Python / TypeScript / Go / Rust / Java / C# / Ruby のシンボルを抽出する。
+抽出対象: 関数・クラス・メソッド（symbol_name / symbol_kind / signature / line）
+"""
+
+from codeatrium.resolver import Symbol, SymbolResolver
+
+resolver = SymbolResolver()
+
+
+# ---- Python ----
+
+
+def test_python_function(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def greet(name: str) -> str:\n    return name\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "greet" in names
+
+
+def test_python_class(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("class Foo:\n    pass\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo" in names
+
+
+def test_extract_source_matches_extract_for_equivalent_bytes(tmp_path):
+    """`extract_source` (used for git-blob resolution) must produce the same
+    symbols as `extract` (disk read) for identical content."""
+    f = tmp_path / "foo.py"
+    source = b"def greet(name: str) -> str:\n    return name\n"
+    f.write_bytes(source)
+
+    from_disk = resolver.extract(f)
+    from_bytes = resolver.extract_source(source, str(f))
+
+    assert from_disk == from_bytes
+
+
+def test_extract_source_unsupported_suffix_returns_empty(tmp_path):
+    assert resolver.extract_source(b"anything", "foo.kt") == []
+
+
+def test_python_method(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("class Foo:\n    def bar(self) -> None:\n        pass\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.bar" in names
+
+
+def test_python_symbol_kind(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def run():\n    pass\n\nclass App:\n    pass\n")
+    symbols = resolver.extract(f)
+    kinds = {s.symbol_name: s.symbol_kind for s in symbols}
+    assert kinds["run"] == "function"
+    assert kinds["App"] == "class"
+
+
+def test_python_signature(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def add(a: int, b: int) -> int:\n    return a + b\n")
+    symbols = resolver.extract(f)
+    sig = symbols[0].signature
+    assert "add" in sig
+    assert "int" in sig
+
+
+def test_python_line_number(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("# comment\ndef second():\n    pass\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "second")
+    assert s.line == 2
+
+
+def test_python_end_line(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def add(a, b):\n    total = a + b\n    return total\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "add")
+    assert s.end_line == 3
+
+
+def test_python_lang(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def run():\n    pass\n")
+    symbols = resolver.extract(f)
+    assert symbols[0].lang == ".py"
+
+
+# ---- TypeScript ----
+
+
+def test_typescript_function(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("function greet(name: string): string { return name; }\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "greet" in names
+
+
+def test_typescript_class(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("class Bar {}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Bar" in names
+
+
+def test_typescript_method(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("class Bar {\n  baz(x: number): void {}\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Bar.baz" in names
+
+
+def test_typescript_end_line(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("function greet(name: string): string {\n  return name;\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "greet")
+    assert s.end_line == 3
+
+
+def test_typescript_lang(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("function greet(): void {}\n")
+    symbols = resolver.extract(f)
+    assert symbols[0].lang == ".ts"
+
+
+# ---- TypeScript / TSX: arrow function components (design §6.0b) ----
+
+
+def test_tsx_arrow_function_exported_const(tmp_path):
+    f = tmp_path / "Button.tsx"
+    f.write_text("export const Button = ({label}) => {\n  return label;\n};\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Button" in names
+
+
+def test_tsx_arrow_function_plain_const(tmp_path):
+    f = tmp_path / "hooks.ts"
+    f.write_text("const useCounter = () => {\n  return 1;\n};\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "useCounter" in names
+
+
+def test_tsx_function_expression_const(tmp_path):
+    f = tmp_path / "foo.ts"
+    f.write_text("const f = function () {\n  return 1;\n};\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "f" in names
+
+
+def test_tsx_react_memo_wrapped_function_expression(tmp_path):
+    f = tmp_path / "Panel.tsx"
+    f.write_text(
+        "export const Panel = React.memo(function Panel(props) {\n"
+        "  return null;\n"
+        "});\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Panel" in names
+
+
+def test_tsx_react_memo_wrapped_arrow(tmp_path):
+    f = tmp_path / "Panel.tsx"
+    f.write_text(
+        "export const Panel = React.memo((props) => {\n  return null;\n});\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Panel" in names
+
+
+def test_tsx_forward_ref_wrapped_arrow(tmp_path):
+    f = tmp_path / "Input.tsx"
+    f.write_text(
+        "const Input = React.forwardRef((props, ref) => {\n  return null;\n});\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Input" in names
+
+
+def test_tsx_export_default_function_still_works(tmp_path):
+    f = tmp_path / "Card.tsx"
+    f.write_text("export default function Card({title}) {\n  return title;\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Card" in names
+
+
+def test_tsx_arrow_function_symbol_kind_is_function(tmp_path):
+    f = tmp_path / "Button.tsx"
+    f.write_text("export const Button = () => {\n  return null;\n};\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Button")
+    assert s.symbol_kind == "function"
+
+
+def test_tsx_arrow_function_end_line(tmp_path):
+    f = tmp_path / "Button.tsx"
+    f.write_text("export const Button = () => {\n  return null;\n};\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Button")
+    assert s.end_line == 3
+
+
+def test_tsx_plain_const_is_not_a_symbol(tmp_path):
+    f = tmp_path / "config.ts"
+    f.write_text("export const MAX_RETRIES = 3;\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "MAX_RETRIES" not in names
+
+
+def test_tsx_arrow_function_signature_stops_before_body(tmp_path):
+    f = tmp_path / "Button.tsx"
+    f.write_text("export const Button = ({label}: Props) => {\n  return label;\n};\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Button")
+    assert s.signature == "export const Button = ({label}: Props) =>"
+
+
+def test_tsx_nested_const_inside_bare_call_is_not_a_symbol(tmp_path):
+    f = tmp_path / "foo.tsx"
+    f.write_text(
+        "useEffect(() => {\n  const timer = () => {};\n  return timer;\n}, []);\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "timer" not in names
+
+
+def test_tsx_nested_const_inside_object_literal_is_not_a_symbol(tmp_path):
+    f = tmp_path / "foo.tsx"
+    f.write_text(
+        "const config = {\n"
+        "  onClick: () => {\n"
+        "    const helper = () => {};\n"
+        "    return helper;\n"
+        "  },\n"
+        "};\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "helper" not in names
+
+
+def test_tsx_top_level_arrow_component_with_nested_helper(tmp_path):
+    f = tmp_path / "Panel.tsx"
+    f.write_text(
+        "export const Panel = () => {\n"
+        "  const renderItem = (item) => item;\n"
+        "  return renderItem;\n"
+        "};\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert names == ["Panel"]
+
+
+# ---- Go ----
+
+
+def test_go_function(tmp_path):
+    f = tmp_path / "foo.go"
+    f.write_text("package main\nfunc Hello(name string) string { return name }\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Hello" in names
+
+
+def test_go_method(tmp_path):
+    f = tmp_path / "foo.go"
+    f.write_text("package main\ntype Foo struct{}\nfunc (f Foo) Bar() {}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.Bar" in names
+
+
+def test_go_lang(tmp_path):
+    f = tmp_path / "foo.go"
+    f.write_text("package main\nfunc Hello() {}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Hello")
+    assert s.lang == ".go"
+
+
+# ---- Rust ----
+
+
+def test_rust_function(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text("fn greet(name: &str) -> String {\n    name.to_string()\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "greet" in names
+
+
+def test_rust_struct(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text("struct Foo {\n    x: i32,\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo" in names
+
+
+def test_rust_struct_symbol_kind(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text("struct Foo {\n    x: i32,\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo")
+    assert s.symbol_kind == "class"
+
+
+def test_rust_enum(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text("enum Color {\n    Red,\n    Green,\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Color" in names
+
+
+def test_rust_impl_method(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text(
+        "struct Foo {\n    x: i32,\n}\n\n"
+        "impl Foo {\n    fn bar(&self) -> i32 {\n        self.x\n    }\n}\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.bar" in names
+
+
+def test_rust_impl_method_symbol_kind(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text(
+        "struct Foo {\n    x: i32,\n}\n\n"
+        "impl Foo {\n    fn bar(&self) -> i32 {\n        self.x\n    }\n}\n"
+    )
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo.bar")
+    assert s.symbol_kind == "method"
+
+
+def test_rust_lang(tmp_path):
+    f = tmp_path / "foo.rs"
+    f.write_text("fn greet() {}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "greet")
+    assert s.lang == ".rs"
+
+
+# ---- Java ----
+
+
+def test_java_class(tmp_path):
+    f = tmp_path / "Foo.java"
+    f.write_text("public class Foo {\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo" in names
+
+
+def test_java_method(tmp_path):
+    f = tmp_path / "Foo.java"
+    f.write_text("public class Foo {\n    public int bar() {\n        return 0;\n    }\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.bar" in names
+
+
+def test_java_method_symbol_kind(tmp_path):
+    f = tmp_path / "Foo.java"
+    f.write_text("public class Foo {\n    public int bar() {\n        return 0;\n    }\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo.bar")
+    assert s.symbol_kind == "method"
+
+
+def test_java_lang(tmp_path):
+    f = tmp_path / "Foo.java"
+    f.write_text("public class Foo {\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo")
+    assert s.lang == ".java"
+
+
+# ---- C# ----
+
+
+def test_csharp_class(tmp_path):
+    f = tmp_path / "Foo.cs"
+    f.write_text("public class Foo {\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo" in names
+
+
+def test_csharp_method(tmp_path):
+    f = tmp_path / "Foo.cs"
+    f.write_text("public class Foo {\n    public int Bar() {\n        return 0;\n    }\n}\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.Bar" in names
+
+
+def test_csharp_method_symbol_kind(tmp_path):
+    f = tmp_path / "Foo.cs"
+    f.write_text("public class Foo {\n    public int Bar() {\n        return 0;\n    }\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo.Bar")
+    assert s.symbol_kind == "method"
+
+
+def test_csharp_lang(tmp_path):
+    f = tmp_path / "Foo.cs"
+    f.write_text("public class Foo {\n}\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo")
+    assert s.lang == ".cs"
+
+
+# ---- Ruby ----
+
+
+def test_ruby_function(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text("def greet(name)\n  name\nend\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "greet" in names
+
+
+def test_ruby_class(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text("class Foo\nend\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo" in names
+
+
+def test_ruby_method(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text("class Foo\n  def bar\n    1\n  end\nend\n")
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Foo.bar" in names
+
+
+def test_ruby_method_symbol_kind(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text("class Foo\n  def bar\n    1\n  end\nend\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "Foo.bar")
+    assert s.symbol_kind == "method"
+
+
+def test_ruby_module_nested_class(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text(
+        "module Outer\n  class Inner\n    def qux\n      1\n    end\n  end\nend\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert "Inner" in names
+    assert "Inner.qux" in names
+
+
+def test_ruby_lang(tmp_path):
+    f = tmp_path / "foo.rb"
+    f.write_text("def greet; end\n")
+    symbols = resolver.extract(f)
+    s = next(s for s in symbols if s.symbol_name == "greet")
+    assert s.lang == ".rb"
+
+
+# ---- Robustness (issue #24) ----
+
+
+def test_go_nested_local_type_is_not_collected_as_top_level_symbol(tmp_path):
+    """`_walk_go` は function_declaration を処理した後 return せず本体へ
+    再帰していたため、関数内のローカル型宣言までトップレベルシンボルとして
+    誤収集していた（Python/TS の walker は再帰しない）。"""
+    f = tmp_path / "foo.go"
+    f.write_text(
+        "package main\n\nfunc Foo() {\n\ttype Bar struct{}\n\t_ = Bar{}\n}\n"
+    )
+    symbols = resolver.extract(f)
+    names = [s.symbol_name for s in symbols]
+    assert names == ["Foo"]
+
+
+def test_go_grouped_type_spec_has_its_own_line_range(tmp_path):
+    """`type ( A ...; B ... )` のような grouped 宣言では、各 type_spec が
+    親の type_declaration 全体の行範囲を共有してしまい line→symbol の
+    マッチングが劣化していた。各 spec は自分自身の行範囲を持つべき。"""
+    f = tmp_path / "foo.go"
+    f.write_text("package main\n\ntype (\n\tA struct{}\n\tB struct{}\n)\n")
+    symbols = resolver.extract(f)
+    by_name = {s.symbol_name: s for s in symbols}
+    assert (by_name["A"].line, by_name["A"].end_line) == (4, 4)
+    assert (by_name["B"].line, by_name["B"].end_line) == (5, 5)
+
+
+def test_python_invalid_identifier_bytes_do_not_abort_whole_file():
+    """識別子スパンの decode が strict だと、不正な UTF-8 バイトを含む識別子1つで
+    UnicodeDecodeError が送出され、そのファイルの以降のシンボル解決が全て
+    中断されてしまう（`_signature` は既に errors='replace' だが、識別子名側は
+    未対応だった）。
+
+    tree-sitter のトークナイザは、有効な UTF-8 にしか一致しない identifier
+    トークンしか生成しないため、正規の `extract`/`extract_source` の入力
+    バイト列を細工しただけでは、このパスを外部から直接再現できない
+    （検証済み: ランダムフォールト含む数万通りの入力で識別子スパンに不正
+    バイトが混入するケースは確認できなかった）。そのため、パース後の
+    `source` バイト列だけを意図的に破損させ、strict decode 経路そのものを
+    直接検証する。破損させるのは識別子スパンの1バイトのみで、他のノードの
+    バイト境界（オフセット）には影響しない。
+    """
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+
+    source = b"def foo():\n    pass\n\n\ndef bar():\n    pass\n"
+    parser = Parser(Language(tspython.language()))
+    tree = parser.parse(source)
+
+    corrupted = bytearray(source)
+    corrupted[source.index(b"foo")] = 0xFF  # "foo" の先頭バイトを不正なUTF-8にする
+
+    symbols = resolver._extract_python(
+        tree.root_node, bytes(corrupted), "foo.py", ".py"
+    )
+    names = [s.symbol_name for s in symbols]
+    assert "bar" in names
+
+
+# ---- Symbol dataclass ----
+
+
+def test_symbol_has_file_path(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def run():\n    pass\n")
+    symbols = resolver.extract(f)
+    assert symbols[0].file_path == str(f)
+
+
+def test_unsupported_extension_returns_empty(tmp_path):
+    f = tmp_path / "foo.kt"
+    f.write_text("fun hello() {}\n")
+    symbols = resolver.extract(f)
+    assert symbols == []
+
+
+def test_nonexistent_file_returns_empty(tmp_path):
+    f = tmp_path / "nonexistent.py"
+    symbols = resolver.extract(f)
+    assert symbols == []
+
+
+def test_returns_symbol_instances(tmp_path):
+    f = tmp_path / "foo.py"
+    f.write_text("def run():\n    pass\n")
+    symbols = resolver.extract(f)
+    assert isinstance(symbols[0], Symbol)

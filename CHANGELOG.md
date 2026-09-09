@@ -1,0 +1,154 @@
+# Changelog
+
+## [Unreleased]
+
+### Added
+- `loci eval gate` (issue #37) is a CI regression gate for symbol-recall.
+  It builds a tiny synthetic git+`code_edges` fixture (no network, no
+  embeddings, no dogfood corpus) and fails if MRR@10 drops more than an
+  absolute 0.01 against committed `src/codeatrium/eval/baseline.json`.
+  Keyword-recall (BM25/HNSW/RRF) remains out of scope.
+
+- `loci status` now surfaces the most recent distill per-row failure
+  (`exchange_id`, message, timestamp) from `meta` when one has been
+  recorded; the field/section is omitted when nothing failed.
+
+- `loci recall --file X --branch Y --json` (issue #33) is a session-start
+  warmup that merges code-anchored `context` lookup with `search_combined`
+  into one deduplicated response (`exchange_core` / `specific_context` /
+  `verbatim_ref`). `--file` and `--branch` are independent AND filters.
+  Ranking applies an opt-in exponential recency decay
+  (`search_combined(..., recency_half_life_days=)`, default half-life 14 days
+  on `loci recall` only; existing `search()`/`context()` ranking is unchanged)
+  using `code_edges.ts` with `conversations.started_at` as fallback.
+
+- `loci gc` (issue #30) snapshots the database, removes only orphaned
+  palace/vector and exchange/session records, retains bounded `.bak` archives,
+  and compacts the database with `VACUUM`.
+
+- `loci hook install`/`uninstall --harness omp-pi|opencode|grok` now write real
+  native hooks (issue #40): `OmpPiHooks`/`OpenCodeHooks` generate a marker-owned
+  `~/.omp/agent/extensions/codeatrium.ts` / `~/.config/opencode/plugins/codeatrium.ts`
+  plugin file (`DedicatedFileWriter`), and `GrokHooks` merges into a dedicated
+  `~/.grok/hooks/codeatrium.json` (`MergedJsonHookWriter`, shared with the new
+  `CodexHooks`). All three previously always failed via `FallbackHooks`, which
+  remains the safety net for unrecognized harnesses.
+
+### Changed
+- Database schema v14 removes unused `vec_exchanges`, obsolete
+  `code_touches.symbol_name`/`resolved_by`, and duplicate `symbols` storage.
+  Existing live legacy symbol relations migrate to `code_symbols` plus
+  `code_edges` before the old table is dropped.
+
+- Lifecycle event → loci command mapping (`Stop`→`index`, `SessionStart`→
+  `server start`/`distill`/`prime`, compact→`prime`) is now a single source of
+  truth: `codeatrium.adapters.harness.lifecycle.lifecycle_commands(harness,
+  batch_limit)`. `ClaudeHooks`/`CodexHooks`/`GrokHooks`/`OmpPiHooks`/
+  `OpenCodeHooks` all derive their commands from it instead of re-deriving
+  the mapping per harness (`codeatrium.hooks.install_hooks`/`uninstall_hooks`
+  keep their Claude-specific JSON-merge/idempotency logic, only the command
+  strings themselves are now sourced from the shared helper). One observable
+  side effect: Claude's `Stop` hook now runs `loci index --harness claude`
+  instead of the previous bare `loci index` (which implicitly swept every
+  detected harness on each Claude turn), matching the scoping Codex already had.
+- `DedicatedFileWriter` uninstall only ever deletes files carrying its own
+  `CODEATRIUM_HOOK_MARKER`; files without the marker (other tools' extensions/
+  plugins sharing the same auto-discovered directory) are left untouched on
+  both install (no clobber) and uninstall (no delete).
+
+### Fixed
+
+- `loci search`'s KNN→filter ordering and branch matching (issue #18):
+  - `search_hnsw_palace` cut the sqlite-vec KNN candidate pool to exactly
+    `limit` *before* applying the `min_exchanges`/`branch` filters, so a
+    branch- or activity-filtered query could silently drop to zero results
+    even when relevant matches existed just outside the initial top-K. The
+    candidate pool is now widened adaptively: it starts at `limit * 5`, and
+    if filtering leaves fewer than `limit` results while unexplored candidates
+    remain in `vec_palace`, the pool doubles and the query retries (bounded by
+    a `2000`-candidate hard cap so worst-case ANN cost stays finite even under
+    a highly selective filter). The final result count is still enforced with
+    an outer `LIMIT`.
+  - `search_bm25`/`search_hnsw_palace`'s `branch` filter interpolated the
+    user-supplied branch string into a `LIKE '%...%'` pattern unescaped, so
+    literal `%`/`_` in the query were interpreted as SQL wildcards (e.g.
+    `main` incorrectly matching `maintenance`/`feat/main-x`). Wildcard
+    characters are now escaped (new `codeatrium.utils.escape_like`) and the
+    clause carries an explicit `ESCAPE '\\'`; substring matching on
+    non-wildcard input is unchanged.
+- Embedding server lifecycle races (issue #16): `loci server start` now serializes
+  the check→spawn→ready-wait sequence behind a process-wide `server.lock`
+  (`fcntl.flock`), eliminating double-spawn/orphaning under concurrent sessions.
+  `run_server` pings an existing socket before binding and refuses to clobber a
+  live server. `loci server status` is now strictly read-only and never deletes
+  a busy-but-unresponsive socket. `Embedder` serializes `model.encode` calls
+  across threads (`SentenceTransformer` inference is not thread-safe). The
+  embedder server now removes its PID file on idle-timeout/stop, not just the
+  socket.
+
+## [0.3.0] - 2026-06-12
+
+### Added
+
+- Branch linking: exchanges are linked to their git branch at index time.
+- `loci search "query" --branch NAME` — branch-filtered semantic search.
+- `loci context --branch NAME` — reverse lookup from a git branch to past conversations (includes undistilled exchanges).
+- `loci context --full` flag; the default output is now lighter.
+- `loci hook uninstall` — remove codeatrium hooks from `settings.json`.
+- SQLite hardening: WAL mode, `busy_timeout`, and a `user_version`-based migration framework.
+- Distillation transactions with `distill_status` and version tracking, plus new indexes.
+
+### Changed
+
+- `loci prime` output rewritten around agent-action triggers with concrete examples.
+- Distillation uses a flock-based lock; embeddings are serialized with `tobytes`.
+- Hook registration writes `settings.json` atomically.
+- Indexing is incremental and reports config errors explicitly.
+
+### Fixed
+
+- Silent data loss in the distillation pipeline; code reverse-lookup works again.
+- Embedding server can no longer double-start; socket protocol hardened and connection leaks fixed.
+- Ply coordinate drift and WAL sidecar file permissions.
+- `loci prime` exits silently when `.codeatrium/` is absent; resolving `.codeatrium/` from a parent directory now notifies on stderr.
+
+## [0.2.0] - 2026-04-21
+
+### Added
+
+- `loci init --no-hooks` flag to skip automatic Claude Code hook registration.
+- `EmbedderSetupError` exception for environment-level embedder failures (distinguishes them from per-row errors).
+- SVG banner at the top of the README (`assets/banner.svg`, generated via Freeze).
+- `scripts/generate-banner.sh` to regenerate the banner from the live CLI output.
+
+### Changed
+
+- `loci init` now registers Claude Code hooks automatically at the end of setup — previously required a separate `loci hook install` step. Use `--no-hooks` to opt out.
+- Interactive prompts re-prompt on invalid input instead of silently falling back to a default. The "run distillation now?" prompt now accepts `y`/`n`/`yes`/`no` in addition to `1`/`2`.
+- Custom exchange counts are range-validated (`1..total`) and custom `min_chars` requires `>= 0`.
+- Startup banner uses the pagga half-block font with a blue vertical gradient.
+
+### Fixed
+
+- `loci init` cleans up `.codeatrium/` automatically if the execution phase fails or is interrupted (`KeyboardInterrupt`), so re-running is safe.
+- A single corrupt `.jsonl` no longer aborts the whole indexing loop — it logs a warning and continues.
+- `git_root()` catches `FileNotFoundError` when the `git` binary is missing.
+- `parse_exchanges` returns `[]` for missing files instead of raising.
+- Distillation failures from `sentence_transformers` import issues (e.g. numpy/pyarrow binary mismatch) now print a single friendly message with remediation hints instead of a full traceback followed by per-row error spam.
+
+## [0.1.0] - 2026-03-31
+
+### Added
+
+- `loci init` — initialize `.codeatrium/` in project root
+- `loci index` — parse `.jsonl` session logs, split into exchanges, embed with multilingual-e5-small
+- `loci distill` — distill exchanges via `claude --print` into palace objects (exchange_core, specific_context, room_assignments)
+- `loci search` — cross-layer RRF fusion search (BM25 verbatim + HNSW distilled)
+- `loci context` — reverse lookup: code symbol → past conversations
+- `loci show` — fetch verbatim exchange by ref
+- `loci status` — show index state
+- `loci server start/stop/status` — Unix socket embedding server for <0.2s search
+- `loci hook install` — register Claude Code SessionStart/Stop hooks
+- `config.toml` support for distill model and batch limit
+- tree-sitter symbol resolution (Python, TypeScript, Go)
+- Bilingual support (Japanese + English) via multilingual-e5-small

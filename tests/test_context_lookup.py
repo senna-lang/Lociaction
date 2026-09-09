@@ -1,0 +1,637 @@
+"""context_lookup のテスト（design §6.0・§6.1・§6.2）"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from codeatrium.context_lookup import (
+    ContextTarget,
+    parse_context_target,
+    pick_enclosing_symbol_name,
+    resolve_u1,
+    resolve_u2,
+    select_ply_window,
+)
+from codeatrium.db import get_connection, init_db
+
+LONG = "x" * 200
+
+
+# ---- parse_context_target（design §6.1） ----
+
+
+def test_parse_context_target_file_only() -> None:
+    assert parse_context_target("src/foo.py") == ContextTarget(file_path="src/foo.py")
+
+
+def test_parse_context_target_file_and_symbol() -> None:
+    assert parse_context_target("src/foo.py:greet") == ContextTarget(
+        file_path="src/foo.py", symbol_name="greet"
+    )
+
+
+def test_parse_context_target_file_and_line() -> None:
+    assert parse_context_target("src/foo.py:142") == ContextTarget(
+        file_path="src/foo.py", line=142
+    )
+
+
+def test_parse_context_target_dotted_symbol_name() -> None:
+    """メソッド名は Foo.bar の形（design §2.4「ファイル名＋シンボル名」）"""
+    assert parse_context_target("src/foo.py:Foo.bar") == ContextTarget(
+        file_path="src/foo.py", symbol_name="Foo.bar"
+    )
+
+
+def test_parse_context_target_absolute_path_no_symbol() -> None:
+    """agent が Read/Edit から得るのは絶対パスであることが多い（U2）"""
+    assert parse_context_target("/repo/src/foo.py") == ContextTarget(
+        file_path="/repo/src/foo.py"
+    )
+
+
+def test_parse_context_target_absolute_path_with_symbol() -> None:
+    assert parse_context_target("/repo/src/foo.py:greet") == ContextTarget(
+        file_path="/repo/src/foo.py", symbol_name="greet"
+    )
+
+
+def test_parse_context_target_colon_inside_path_is_not_a_separator() -> None:
+    """コロンの後ろに "/" があれば、それはパスの一部（POSIXではファイル名にコロンを含められる）"""
+    assert parse_context_target("src/a:b/foo.py") == ContextTarget(
+        file_path="src/a:b/foo.py"
+    )
+
+
+# ---- pick_enclosing_symbol_name（design §6.1 行→シンボル変換） ----
+
+
+def test_pick_enclosing_symbol_name_line_inside_span() -> None:
+    symbols = [("greet", 5, 8), ("other", 20, 25)]
+    assert pick_enclosing_symbol_name(6, symbols) == "greet"
+
+
+def test_pick_enclosing_symbol_name_line_outside_all_spans() -> None:
+    symbols = [("greet", 5, 8), ("other", 20, 25)]
+    assert pick_enclosing_symbol_name(12, symbols) is None
+
+
+def test_pick_enclosing_symbol_name_boundary_lines_included() -> None:
+    symbols = [("greet", 5, 8)]
+    assert pick_enclosing_symbol_name(5, symbols) == "greet"
+    assert pick_enclosing_symbol_name(8, symbols) == "greet"
+
+
+def test_pick_enclosing_symbol_name_empty_symbols_returns_none() -> None:
+    assert pick_enclosing_symbol_name(5, []) is None
+
+
+# ---- resolve_u1 / resolve_u2 のフィクスチャ ----
+
+
+def _setup_db(tmp_path: Path):
+    db = tmp_path / "memory.db"
+    init_db(db)
+    return get_connection(db)
+
+
+def _insert_conversation_and_exchange(
+    con,
+    conv_id: str,
+    ex_id: str,
+    ply_start: int = 0,
+    git_branch: str | None = None,
+    user_content: str | None = None,
+    agent_content: str | None = None,
+) -> None:
+    con.execute(
+        "INSERT OR IGNORE INTO conversations (id, source_path) VALUES (?, ?)",
+        (conv_id, f"/fake/{conv_id}.jsonl"),
+    )
+    con.execute(
+        """INSERT OR IGNORE INTO exchanges
+           (id, conversation_id, ply_start, ply_end, user_content, agent_content, git_branch)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            ex_id,
+            conv_id,
+            ply_start,
+            ply_start + 1,
+            user_content if user_content is not None else "user " + LONG,
+            agent_content if agent_content is not None else "agent " + LONG,
+            git_branch,
+        ),
+    )
+
+
+def _insert_symbol(con, symbol_id: str, file_path: str, symbol_name: str) -> None:
+    con.execute(
+        """INSERT OR IGNORE INTO code_symbols
+           (id, file_path, symbol_name, symbol_kind, signature, line, end_line, lang, resolved_at)
+           VALUES (?, ?, ?, 'function', 'def f():', 1, 2, '.py', '2026-08-09T00:00:00Z')""",
+        (symbol_id, file_path, symbol_name),
+    )
+
+
+def _insert_edge(
+    con,
+    edge_id: str,
+    exchange_id: str,
+    file_path: str,
+    symbol_id: str | None,
+    granularity: str,
+    confidence: float,
+    ts: str = "2026-08-09T00:00:00Z",
+) -> None:
+    con.execute(
+        """INSERT OR IGNORE INTO code_edges
+           (id, exchange_id, file_path, symbol_id, edge_kind, granularity, confidence, added, ts)
+           VALUES (?, ?, ?, ?, 'edit', ?, ?, 1, ?)""",
+        (edge_id, exchange_id, file_path, symbol_id, granularity, confidence, ts),
+    )
+
+
+def _insert_touch(
+    con, touch_id: str, exchange_id: str, file_path: str, ts: str = "2026-08-09T00:00:00Z"
+) -> None:
+    """distill/tree-sitter 解決を経ない生の code_touches 行を挿入する（design: issue #32 の
+    フォールバック段のテスト用フィクスチャ）。"""
+    con.execute(
+        """INSERT OR IGNORE INTO code_touches
+           (id, exchange_id, harness, tool_call_id, file_path, touch_kind, locator_kind,
+            added, removed, ts)
+           VALUES (?, ?, 'claude', 'tc1', ?, 'edit', 'file', 1, 0, ?)""",
+        (touch_id, exchange_id, file_path, ts),
+    )
+
+
+# ---- resolve_u1 ----
+
+
+def test_resolve_u1_exact_symbol_match(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_symbol(con, "sym1", "src/foo.py", "greet")
+    _insert_edge(con, "e1", "ex1", "src/foo.py", "sym1", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "symbol"
+    assert hits[0].confidence == 1.0
+    assert hits[0].symbol_name == "greet"
+    assert hits[0].exchange_id == "ex1"
+    assert hits[0].verbatim_ref == "/fake/c1.jsonl:ply=0"
+    assert hits[0].distilled is True
+
+
+def test_resolve_u1_falls_back_to_file_when_symbol_not_found(tmp_path: Path) -> None:
+    """不変条件: code_touches.symbol_name を誤って参照していないか
+    （resolve_symbol_name はまだ配線されていないので常にNULLのはず）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_symbol(con, "sym1", "src/foo.py", "other_func")
+    _insert_edge(con, "e1", "ex1", "src/foo.py", "sym1", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "file"
+    assert hits[0].confidence == 0.45
+
+
+def test_resolve_u1_falls_back_to_directory(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/bar.py", None, "file", 0.5)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "directory"
+    assert hits[0].confidence == 0.25
+    assert hits[0].file_path == "src/bar.py"
+
+
+def test_resolve_u1_directory_match_excludes_nested_subdirectories(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/nested/bar.py", None, "file", 0.5)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert hits == []
+
+
+def test_resolve_u1_no_match_returns_empty(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert hits == []
+
+
+def test_resolve_u1_does_not_top_up_across_tiers(tmp_path: Path) -> None:
+    """symbol段がヒットしたら、limitに満たなくてもfile段から埋め合わせない（design §6.2）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_symbol(con, "sym1", "src/foo.py", "greet")
+    _insert_edge(con, "e1", "ex1", "src/foo.py", "sym1", "line", 1.0)
+    # 同じファイルの別シンボルへの file 段ヒット候補（symbol段がヒットするので使われないはず）
+    _insert_conversation_and_exchange(con, "c2", "ex2")
+    _insert_symbol(con, "sym2", "src/foo.py", "other")
+    _insert_edge(con, "e2", "ex2", "src/foo.py", "sym2", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert all(h.match_kind == "symbol" for h in hits)
+
+
+def test_resolve_u1_respects_limit(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    for i in range(3):
+        _insert_conversation_and_exchange(con, f"c{i}", f"ex{i}")
+        _insert_symbol(con, "sym1", "src/foo.py", "greet")
+        _insert_edge(con, f"e{i}", f"ex{i}", "src/foo.py", "sym1", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=2)
+
+    assert len(hits) == 2
+
+
+def test_resolve_u1_alias_paths_widen_symbol_tier(tmp_path: Path) -> None:
+    """design §8.2: 旧パスの edge も symbol段でヒットする（file段へ落とさない）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_symbol(con, "sym1", "src/logo/db.py", "get_connection")
+    _insert_edge(con, "e1", "ex1", "src/logo/db.py", "sym1", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u1(
+        con, "src/codeatrium/db.py", "get_connection", limit=5,
+        alias_paths=("src/logo/db.py",),
+    )
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "symbol"
+    assert hits[0].confidence == 1.0
+
+
+def test_resolve_u1_alias_paths_do_not_affect_lookup_when_empty(tmp_path: Path) -> None:
+    """alias_paths を渡さない場合の挙動は変わらない（既定は空タプル）"""
+    con = _setup_db(tmp_path)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert hits == []
+
+
+# ---- resolve_u1 code_touches フォールバック（design: issue #32） ----
+
+
+def test_resolve_u1_falls_back_to_touch_symbol_when_no_distilled_edges(tmp_path: Path) -> None:
+    """distill 済み code_edges が1件も無くても、code_touches + 本文の symbol 名一致から
+    フォールバックできる（受け入れ基準: distill 前の DB でも会話を返す）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(
+        con, "c1", "ex1", user_content="please rename greet() to greeting()"
+    )
+    _insert_touch(con, "t1", "ex1", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "touch_symbol"
+    assert hits[0].confidence == 0.20
+    assert hits[0].symbol_name == "greet"
+    assert hits[0].exchange_id == "ex1"
+    assert hits[0].distilled is False
+
+
+def test_resolve_u1_falls_back_to_touch_file_when_symbol_not_mentioned(tmp_path: Path) -> None:
+    """本文に symbol 名の言及が無い touch は touch_file 段（symbol無し）まで落ちる"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(
+        con, "c1", "ex1", user_content="fix the off-by-one bug", agent_content="done"
+    )
+    _insert_touch(con, "t1", "ex1", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "touch_file"
+    assert hits[0].confidence == 0.15
+    assert hits[0].symbol_name is None
+    assert hits[0].distilled is False
+
+
+def test_resolve_u1_touch_symbol_matches_dotted_leaf(tmp_path: Path) -> None:
+    """"Foo.bar" で問い合わせても、本文中の裸の "bar" に語境界付きで一致する
+    （eval/gen/gen_symbol_recall.py の gold 判定と同じ leaf 一致基準）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(
+        con, "c1", "ex1", user_content="the bar method needs a null check"
+    )
+    _insert_touch(con, "t1", "ex1", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "Foo.bar", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "touch_symbol"
+    assert hits[0].symbol_name == "Foo.bar"
+
+
+def test_resolve_u1_touch_fallback_not_used_when_code_edges_present(tmp_path: Path) -> None:
+    """symbol/file/directory 段のいずれかがヒットしていれば、code_touches段は試さない
+    （最初にヒットした段だけを返す設計を touch フォールバックでも保つ）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/bar.py", None, "file", 0.5)
+    _insert_conversation_and_exchange(
+        con, "c2", "ex2", user_content="mentions greet() too"
+    )
+    _insert_touch(con, "t1", "ex2", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "directory"
+    assert hits[0].distilled is True
+
+
+# ---- resolve_u2 ----
+
+
+def test_resolve_u2_file_match_groups_multiple_symbols(tmp_path: Path) -> None:
+    """U2 file段: シンボルごとにまとめて複数返す（design §6.2、best 1件だけを返さない）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_symbol(con, "sym1", "src/foo.py", "greet")
+    _insert_edge(con, "e1", "ex1", "src/foo.py", "sym1", "line", 1.0)
+    _insert_conversation_and_exchange(con, "c2", "ex2")
+    _insert_symbol(con, "sym2", "src/foo.py", "farewell")
+    _insert_edge(con, "e2", "ex2", "src/foo.py", "sym2", "line", 1.0)
+    con.commit()
+
+    hits = resolve_u2(con, "src/foo.py", limit=5)
+
+    assert len(hits) == 2
+    assert all(h.match_kind == "file" for h in hits)
+    assert all(h.confidence == 1.0 for h in hits)
+    assert {h.symbol_name for h in hits} == {"greet", "farewell"}
+    assert all(h.distilled is True for h in hits)
+
+
+def test_resolve_u2_falls_back_to_directory(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/bar.py", None, "file", 0.5)
+    con.commit()
+
+    hits = resolve_u2(con, "src/foo.py", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "directory"
+    assert hits[0].confidence == 0.30
+
+
+def test_resolve_u2_no_match_returns_empty(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    con.commit()
+
+    hits = resolve_u2(con, "src/foo.py", limit=5)
+
+    assert hits == []
+
+
+def test_resolve_u2_root_level_file_directory_match(tmp_path: Path) -> None:
+    """ディレクトリが '' (プロジェクトルート直下) のケースを正しく扱う"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "README.md", None, "file", 0.5)
+    con.commit()
+
+    hits = resolve_u2(con, "pyproject.toml", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "directory"
+    assert hits[0].file_path == "README.md"
+
+
+def test_resolve_u2_alias_paths_widen_file_tier(tmp_path: Path) -> None:
+    """design §8.2: 旧パスの edge を file段でひとつのファイルとして扱う"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/logo/db.py", None, "file", 0.5)
+    con.commit()
+
+    hits = resolve_u2(
+        con, "src/codeatrium/db.py", limit=5, alias_paths=("src/logo/db.py",)
+    )
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "file"
+    assert hits[0].confidence == 1.0
+    assert hits[0].file_path == "src/logo/db.py"
+
+
+
+# ---- resolve_u2 code_touches フォールバック（design: issue #32） ----
+
+
+def test_resolve_u2_falls_back_to_touch_file_when_no_distilled_edges(tmp_path: Path) -> None:
+    """distill 済み code_edges が1件も無くても、code_touches から会話を返す
+    （受け入れ基準: distill 前の DB でも `loci context <file>` が touch ベースの会話を返す）"""
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_touch(con, "t1", "ex1", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u2(con, "src/foo.py", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "touch_file"
+    assert hits[0].confidence == 0.20
+    assert hits[0].symbol_name is None
+    assert hits[0].distilled is False
+
+
+def test_resolve_u2_touch_fallback_not_used_when_code_edges_present(tmp_path: Path) -> None:
+    con = _setup_db(tmp_path)
+    _insert_conversation_and_exchange(con, "c1", "ex1")
+    _insert_edge(con, "e1", "ex1", "src/bar.py", None, "file", 0.5)
+    _insert_conversation_and_exchange(con, "c2", "ex2")
+    _insert_touch(con, "t1", "ex2", "src/foo.py")
+    con.commit()
+
+    hits = resolve_u2(con, "src/foo.py", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].match_kind == "directory"
+    assert hits[0].distilled is True
+
+
+# ---- select_ply_window（純関数、周辺コンテキストのply隣接窓） ----
+
+
+def test_select_ply_window_returns_before_and_after() -> None:
+    ids = ["a", "b", "c", "d", "e"]
+    assert select_ply_window(ids, "c", k_before=2, k_after=1) == ["a", "b", "d"]
+
+
+def test_select_ply_window_anchor_at_start_returns_only_after() -> None:
+    ids = ["a", "b", "c"]
+    assert select_ply_window(ids, "a", k_before=2, k_after=1) == ["b"]
+
+
+def test_select_ply_window_anchor_at_end_returns_only_before() -> None:
+    ids = ["a", "b", "c"]
+    assert select_ply_window(ids, "c", k_before=2, k_after=1) == ["a", "b"]
+
+
+def test_select_ply_window_anchor_not_found_returns_empty() -> None:
+    assert select_ply_window(["a", "b"], "z", k_before=2, k_after=1) == []
+
+
+def test_select_ply_window_single_element_list_returns_empty() -> None:
+    assert select_ply_window(["a"], "a", k_before=2, k_after=1) == []
+
+
+def test_select_ply_window_k_exceeding_length_is_clamped() -> None:
+    ids = ["a", "b", "c"]
+    assert select_ply_window(ids, "b", k_before=10, k_after=10) == ["a", "c"]
+
+
+def test_select_ply_window_empty_list_returns_empty() -> None:
+    assert select_ply_window([], "a", k_before=2, k_after=1) == []
+
+
+# ---- ContextHit.context（design: 周辺コンテキストの2レーン） ----
+
+
+def test_resolve_u1_attaches_ply_adjacent_context_for_ordinary_conversation(
+    tmp_path: Path,
+) -> None:
+    """主レーン（design: hit の81%はこちらで解決）。同一会話内の ply 隣接を additive に返す"""
+    con = _setup_db(tmp_path)
+    conv_id = "conv1"
+    _insert_conversation_and_exchange(con, conv_id, "ex0", ply_start=0)
+    _insert_conversation_and_exchange(con, conv_id, "ex1", ply_start=10)
+    _insert_conversation_and_exchange(con, conv_id, "ex2", ply_start=20)
+    _insert_symbol(con, "sym1", "src/foo.py", "greet")
+    _insert_edge(con, "edge1", "ex1", "src/foo.py", "sym1", "symbol", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].exchange_id == "ex1"
+    relations = {(s.relation, s.exchange_id) for s in hits[0].context}
+    assert relations == {("ply_adjacent", "ex0"), ("ply_adjacent", "ex2")}
+
+
+def test_resolve_u1_ply_adjacent_context_respects_before_after_asymmetry(
+    tmp_path: Path,
+) -> None:
+    """既定は前2件・後1件。3件先の会話は前側の窓に入らない"""
+    con = _setup_db(tmp_path)
+    conv_id = "conv1"
+    for i, ply in enumerate([0, 10, 20, 30, 40]):
+        _insert_conversation_and_exchange(con, conv_id, f"ex{i}", ply_start=ply)
+    _insert_symbol(con, "sym1", "src/foo.py", "greet")
+    _insert_edge(con, "edge1", "ex2", "src/foo.py", "sym1", "symbol", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    relations = [(s.relation, s.exchange_id) for s in hits[0].context]
+    assert relations == [("ply_adjacent", "ex0"), ("ply_adjacent", "ex1"), ("ply_adjacent", "ex3")]
+
+
+def test_resolve_u1_attaches_parent_session_context_for_subagent_hit(
+    tmp_path: Path,
+) -> None:
+    """副レーン（design §2.3: hit の19%、サブエージェント発の機械的指示ヒット）。
+    サブエージェント自身の前後（機械的指示）は使わず、親会話の同一ファイル編集を返す。
+    """
+    con = _setup_db(tmp_path)
+
+    # 親会話: 同じファイルを編集した exchange を持つ
+    con.execute(
+        "INSERT OR IGNORE INTO conversations (id, source_path) VALUES (?, ?)",
+        ("parent-conv", "/fake/parent.jsonl"),
+    )
+    con.execute(
+        """INSERT OR IGNORE INTO exchanges
+           (id, conversation_id, ply_start, ply_end, user_content, agent_content)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("parent-ex", "parent-conv", 5, 6, "user " + LONG, "agent " + LONG),
+    )
+    con.execute(
+        """INSERT OR IGNORE INTO code_edges
+           (id, exchange_id, file_path, symbol_id, edge_kind, granularity, confidence, added, ts)
+           VALUES ('parent-edge', 'parent-ex', 'src/foo.py', NULL, 'edit', 'file', 1.0, 1, '2026-08-09T00:00:00Z')"""
+    )
+
+    # サブエージェント会話: parent_session_ref で親を指す。前後に別 exchange があってもノイズとして使わない
+    con.execute(
+        "INSERT INTO conversations (id, source_path, parent_session_ref) VALUES (?, ?, ?)",
+        ("sub-conv", "/fake/sub.jsonl", "/fake/parent.jsonl"),
+    )
+    _insert_conversation_and_exchange(con, "sub-conv", "sub-before", ply_start=0)
+    _insert_conversation_and_exchange(con, "sub-conv", "sub-hit", ply_start=1)
+    _insert_conversation_and_exchange(con, "sub-conv", "sub-after", ply_start=2)
+    _insert_symbol(con, "sym2", "src/foo.py", "greet")
+    _insert_edge(con, "sub-edge", "sub-hit", "src/foo.py", "sym2", "symbol", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].exchange_id == "sub-hit"
+    assert [s.relation for s in hits[0].context] == ["parent_session"]
+    assert hits[0].context[0].exchange_id == "parent-ex"
+
+
+def test_resolve_u1_parent_session_context_empty_when_parent_has_no_matching_edit(
+    tmp_path: Path,
+) -> None:
+    """親会話が同一ファイルを編集していなければ、適当な代替を出さず空を返す（design §6.2）"""
+    con = _setup_db(tmp_path)
+    con.execute(
+        "INSERT OR IGNORE INTO conversations (id, source_path) VALUES (?, ?)",
+        ("parent-conv", "/fake/parent.jsonl"),
+    )
+    con.execute(
+        """INSERT OR IGNORE INTO exchanges
+           (id, conversation_id, ply_start, ply_end, user_content, agent_content)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("parent-ex", "parent-conv", 5, 6, "user " + LONG, "agent " + LONG),
+    )
+    con.execute(
+        "INSERT INTO conversations (id, source_path, parent_session_ref) VALUES (?, ?, ?)",
+        ("sub-conv", "/fake/sub.jsonl", "/fake/parent.jsonl"),
+    )
+    _insert_conversation_and_exchange(con, "sub-conv", "sub-hit", ply_start=1)
+    _insert_symbol(con, "sym3", "src/foo.py", "greet")
+    _insert_edge(con, "sub-edge2", "sub-hit", "src/foo.py", "sym3", "symbol", 1.0)
+    con.commit()
+
+    hits = resolve_u1(con, "src/foo.py", "greet", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].context == []

@@ -1,0 +1,121 @@
+"""loci status コマンド"""
+
+from __future__ import annotations
+
+import json
+from typing import Annotated
+
+import typer
+
+
+def status(
+    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="設定済み distill client の readiness を確認する（サービスへ接続する場合がある）",
+        ),
+    ] = False,
+) -> None:
+    """インデックス状態を表示し、--check 指定時だけ distill client の readiness を確認する"""
+    from codeatrium.adapters.model.registry import check_ready
+    from codeatrium.config import load_config
+    from codeatrium.db import check_drift, get_connection, get_last_distill_error
+    from codeatrium.paths import db_path, find_project_root
+
+    root = find_project_root()
+
+    db = db_path(root)
+
+    if not db.exists():
+        typer.echo("Not initialized. Run `loci init` first.", err=True)
+        raise typer.Exit(1)
+
+    con = get_connection(db)
+    try:
+        total = con.execute("SELECT COUNT(*) FROM exchanges").fetchone()[0]
+        distilled = con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE distill_status = 'distilled'"
+        ).fetchone()[0]
+        skipped = con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE distill_status = 'skipped'"
+        ).fetchone()[0]
+        pending = con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE distill_status = 'pending'"
+        ).fetchone()[0]
+        palace_count = con.execute("SELECT COUNT(*) FROM palace_objects").fetchone()[0]
+        symbol_count = con.execute("SELECT COUNT(*) FROM code_symbols").fetchone()[0]
+    finally:
+        con.close()
+    cfg = load_config(root)
+
+    if cfg.distill_unconfigured or not cfg.distill_client:
+        distill_client_label = "unconfigured"
+        distill_available = False
+        distill_checked = False
+    else:
+        distill_client_label = cfg.distill_client
+        distill_checked = check
+        distill_available = (
+            check_ready(cfg.distill_client).state == "ready" if check else None
+        )
+
+    # config.toml の構文エラーは background hook からは stderr が
+    # `> /dev/null 2>&1` に捨てられ気づけないため、`loci status` で明示的に
+    # 警告する（load_config は既定へフォールバックしただけで、それ自体は
+    # distill_unconfigured と区別が付かない）。
+    if cfg.config_error:
+        typer.echo(
+            f"⚠ config.toml failed to parse, running unconfigured: {cfg.config_error}",
+            err=True,
+        )
+
+    drifts = check_drift(db)
+    for key, recorded, current in drifts:
+        typer.echo(
+            f"[drift] {key}: recorded={recorded}, current={current} — re-index recommended",
+            err=True,
+        )
+    db_size_bytes = db.stat().st_size
+    db_size_kb = db_size_bytes / 1024
+    last_error = get_last_distill_error(db)
+
+    if json_output:
+        payload = {
+            "db_path": str(db),
+            "config_error": cfg.config_error,
+            "exchanges": total,
+            "distilled": distilled,
+            "skipped": skipped,
+            "pending": pending,
+            "palace_objects": palace_count,
+            "symbols": symbol_count,
+            "db_size_kb": round(db_size_kb, 1),
+            "distill_client": distill_client_label,
+            "distill_available": distill_available,
+            "distill_checked": distill_checked,
+        }
+        if last_error is not None:
+            payload["last_distill_error"] = last_error
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        typer.echo(f"DB: {db} ({db_size_kb:.1f} KB)")
+        typer.echo(
+            f"Exchanges : {total} total | {distilled} distilled, {skipped} skipped, {pending} pending"
+        )
+        typer.echo(f"Palace    : {palace_count}")
+        typer.echo(f"Symbols   : {symbol_count}")
+        if distill_available is None:
+            avail = "not checked"
+        else:
+            avail = "ready" if distill_available else "not ready"
+        typer.echo(f"Distill   : {distill_client_label} ({avail})")
+        if last_error is not None:
+            typer.echo(
+                f"Last distill failure: {last_error['exchange_id']} — "
+                f"{last_error['message']} ({last_error['timestamp']})"
+            )
+        if cfg.config_error:
+            typer.echo(f"Config    : ⚠ parse error — {cfg.config_error}")
+
