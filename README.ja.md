@@ -12,7 +12,7 @@ AI コーディングエージェントは、2 つの想起プリミティブ �
 
 CLI コマンド `loci` は**エージェント自身が呼び出す**ことを想定しています — `loci search "..." --json` をプロンプト内から実行します。*(名前は記憶術 [Method of Loci＝記憶の宮殿](https://ja.wikipedia.org/wiki/%E5%A0%B4%E6%89%80%E6%B3%95) に由来します。内部では会話を「palace object」に蒸留します（[仕組み](#仕組み)を参照）。アーキテクチャは [arXiv:2603.13017](https://arxiv.org/abs/2603.13017) の会話記憶モデルをコーディングエージェント向けに拡張したものです。)*
 
-> **対応 harness:** Claude Code、Codex CLI、Oh My Pi、OpenCode、Grok のセッションログを、同一の exchange・code touch・symbol・search・context・`show` 契約で扱います。蒸留は harness から独立しており、`claude --print` またはローカルの OpenAI 互換 LLM を選べます。
+> **対応 harness:** Claude Code、Codex CLI、Oh My Pi、OpenCode、Grok のセッションログを、同一の exchange・code touch・symbol・search・context・`show` 契約で扱います。蒸留はそれとは独立した選択で、`loci distill` はどの harness 由来の exchange であっても同じ設定済み client（`claude-cli`、`codex-cli`、`gemini-cli`、`grok-cli`、`opencode-cli`、`omp-cli`、ローカルの Ollama モデル、任意の OpenAI 互換エンドポイント）を使って蒸留します。
 
 ## ミニマルなインターフェース
 
@@ -31,7 +31,7 @@ CLI コマンド `loci` は**エージェント自身が呼び出す**ことを�
 ## 仕組み
 
 1. **Index** — エージェントのセッションログを exchange（ユーザー発話 + エージェント応答のペア）に分割し、FTS5 でキーワード検索可能にする
-2. **Distill** — LLM（`claude --print`、デフォルトは `claude-haiku-4-5`）が各 exchange を palace object に要約: `exchange_core`（何をしたか）、`specific_context`（具体的な詳細）、`room_assignments`（トピックタグ）。tree-sitter で触れたファイルをシンボルレベル（関数・クラス・メソッド + ファイル + 行 + シグネチャ）に解決
+2. **Distill** — 設定済みの蒸留 client（既定は `claude --print` + `claude-haiku-4-5`。他5つの CLI backend やローカルモデルは[設定](#設定)を参照）が各 exchange を palace object に要約: `exchange_core`（何をしたか）、`specific_context`（具体的な詳細）、`room_assignments`（トピックタグ）。tree-sitter で触れたファイルをシンボルレベル（関数・クラス・メソッド + ファイル + 行 + シグネチャ）に解決
 3. **Search** — 会話原文の BM25 と蒸留済み埋め込みの HNSW を RRF で融合するクロスレイヤー検索
 
 会話原文は埋め込まず、蒸留で濃縮されたテキストのみを `multilingual-e5-small`（384次元）で埋め込むことで、セマンティック検索の精度と埋め込みコストを両立しています。埋め込みモデルは **Unix ソケットサーバー**で常駐し、初回以降の検索は **0.2 秒以内**で返ります。
@@ -66,6 +66,10 @@ loci init
    - Custom（件数を指定）
 3. **蒸留を今すぐ実行するか** — `1`/`2`/`y`/`n`/`yes`/`no` を受理。No を選ぶと次回セッション開始時に自動実行されます。
 
+過去のセッション履歴の有無にかかわらず、`loci init` は一度だけ次も尋ねます:
+
+4. **蒸留 client の選択** — [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller)（この蒸留タスク専用にファインチューンした Qwen2.5-7B。SFT + ORPO on WildChat-1M）がまだ pull されていなければ、`loci init` はまず `ollama pull` をオファーします（約4.7GB、[Ollama](https://ollama.com) が必要）。続けて、このマシンで実際に *Ready* と検出された蒸留 client — `claude-cli`、`codex-cli`、`gemini-cli`、`grok-cli`、`opencode-cli`、`omp-cli`、そして pull 済みなら `ollama-ft` — を一覧表示し、選択を求めます（`claude-cli` があれば既定で推奨されます）。実際に `PATH` に存在する CLI だけが表示され、これは今作業している harness とは無関係です（[設定](#設定)の補足を参照）。`--no-local-distiller` で Ollama pull のオファーをスキップ、`--distill-client <id>` で非対話に選択できます（その client が Ready でなければエラー終了 — 別 client への自動フォールバックはしません）。Ready な client が1つもなければ蒸留は未設定のまま残り、後で `loci distill --setup` を実行できます。
+
 各プロンプトで無効な入力をした場合、サイレントにデフォルトへ倒れず再入力を求めます。
 
 ## エージェント向けインストラクション
@@ -76,9 +80,9 @@ loci init
 
 | コマンド | 説明 |
 |---------|------|
-| `loci init` | `.lociaction/` を初期化し、共通 `AGENTS.md` 指示を追加、Claude Code フックを登録（`--no-hooks` で省略可） |
+| `loci init [--distill-client ID]` | `.lociaction/` を初期化し、共通 `AGENTS.md` 指示を追加、Claude Code フックを登録（`--no-hooks` で省略可、`--no-local-distiller` で Ollama pull オファーを省略、`--distill-client` で蒸留 client を非対話に指定） |
 | `loci index [--harness all\|claude\|codex\|opencode\|omp-pi\|grok]` | 新しいセッションログをインデックス（既定は検出した全 harness） |
-| `loci distill [--limit N]` | 未蒸留の exchange を LLM で蒸留 |
+| `loci distill [--limit N] [--setup]` | 設定済み client で未蒸留の exchange を蒸留。`--setup` は discover/選択をやり直して config に保存 |
 | `loci gc` | `memory.db` を `.bak` に安全にスナップショットし、孤立した palace/vector/session レコードだけを削除。現行 backup と直近3世代を残して `VACUUM` |
 | `loci search "クエリ" --json` | セマンティック検索（エージェント向け）。`--branch NAME` で git ブランチ絞り込み |
 | `loci context --symbol "名前" --json` | コードシンボル → 過去の会話（軽量。`--full` で会話原文も含める） |
@@ -128,8 +132,8 @@ Native hook は turn end を `loci index`、session start を `loci server start
 
 ```toml
 [distill]
-provider = "claude"                    # 蒸留 backend: "claude" | "openai"（既定 "claude"）
-model = "claude-haiku-4-5"             # 蒸留に使うモデル（デフォルト）
+client = "claude-cli"                  # 蒸留 backend — id 一覧は下記参照
+model = "claude-haiku-4-5-20251001"    # 蒸留に使うモデル（省略時は client ごとの既定値）
 batch_limit = 20                       # 1回あたりの蒸留上限
 min_chars = 100                        # この文字数未満の exchange は蒸留をスキップ
 
@@ -139,19 +143,23 @@ min_chars = 50                         # この文字数未満の exchange は�
 
 `min_chars` は2か所あります。`[index] min_chars` はそもそもインデックス対象にするかを制御し、`[distill] min_chars` はインデックス済みの短い exchange について蒸留（LLM コスト）をさらにスキップします。
 
+`client` は今作業している harness とは独立しています — `loci distill` は Claude Code / Codex / Grok / OpenCode / Oh My Pi のどれ由来の exchange でも、設定済みの client 1つで蒸留します（[Harness lifecycle](#harness-lifecycle)参照）。有効な id: `claude-cli`、`codex-cli`、`gemini-cli`、`grok-cli`、`opencode-cli`、`omp-cli`、`ollama-ft`、`openai-compat`。旧来の `provider = "claude" | "openai"` + `base_url` 形式も後方互換で読み込みますが、`loci init`/`loci distill --setup` が書き込むのは `client` であり、手で編集する場合もこちらを推奨します。
+
 ### ローカル LLM で蒸留する
 
-蒸留は exchange ごとの小さな構造化抽出タスクなので、ローカルモデルでも十分なことが多いです。OpenAI 互換のエンドポイント（Ollama、LM Studio、llama.cpp-server、vLLM）なら `provider = "openai"` と `base_url` を指定するだけで動きます — 新規依存なし・API キー不要（`Authorization` ヘッダーは送らないため、ローカル専用です）:
+蒸留は exchange ごとの小さな構造化抽出タスクなので、ローカルモデルでも十分なことが多いです。OpenAI 互換のエンドポイント（Ollama、LM Studio、llama.cpp-server、vLLM）なら `client = "openai-compat"` に `model`/`base_url` を指定するだけで動きます — 新規依存なし・API キー不要（`Authorization` ヘッダーは送らないため、ローカル専用です）:
 
 ```toml
 [distill]
-provider = "openai"
+client = "openai-compat"
 model = "qwen2.5:7b"
 base_url = "http://localhost:11434/v1"   # Ollama
 # base_url = "http://localhost:1234/v1"  # LM Studio
 ```
 
-`provider = "openai"` のとき `base_url` は必須です。未設定または空の場合は警告して `claude` にフォールバックします。`provider = "claude"`（既定）では `base_url` は無視され、従来どおり `claude --print` で蒸留します。
+`openai-compat` は `model`/`base_url` の両方が必須です（欠けると解決に失敗します）。Ollama の既定ポートで同梱のファインチューン済みモデルを使うなら、代わりに `client = "ollama-ft"` を使ってください — モデルとエンドポイントを自動で知っています（[`loci init`](#クイックスタート)参照）。
+
+`loci init` は [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller)（このタスク専用にファインチューンしたモデル。上記のプロンプト参照）でこのセットアップを自動的にオファーします — 承諾すれば手動設定は不要です。
 
 ### 他のコーディングエージェント CLI で蒸留する
 
