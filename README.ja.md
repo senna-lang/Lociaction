@@ -51,7 +51,7 @@ Python 3.11 以上が必要です。
 loci init
 ```
 
-`loci init` は project-local DB を作成し、共通の `AGENTS.md` 指示を追加します。Claude Code フックは `--no-hooks` を指定しない限り登録します。Codex の native hook は `loci hook install --harness codex` で明示的に登録します。native hook 非対応 harness では完全な fallback recipe を表示します。
+`loci init` は project-local DB を作成し、共通の `AGENTS.md` 指示を追加します。Claude Code フックは `--no-hooks` を指定しない限り登録します。他の対応 harness（Codex、Grok、Oh My Pi、OpenCode）も全て native lifecycle hook に完全対応しており、`loci hook install --harness <name>` で明示的に登録します。
 
 `loci init` を実行すると、過去のセッションログが検出された場合に以下の質問が表示されます:
 
@@ -92,20 +92,20 @@ loci init
 | `loci status` | インデックス状態を表示 |
 | `loci prime` | コマンドの使い方をセッションコンテキストに注入 |
 | `loci server start/stop/status` | 埋め込みサーバー管理 |
-| `loci hook install --harness NAME` | native lifecycle hook を登録、または fallback recipe を表示 |
+| `loci hook install --harness NAME` | 対応する5 harnessいずれかの native lifecycle hook を登録 |
 | `loci hook uninstall --harness NAME` | native lociaction lifecycle hook を削除 |
 
 ## Harness lifecycle
 
-| Harness | transcript | native lifecycle | fallback |
-|---------|------------|------------------|----------|
-| Claude Code | project JSONL | `~/.claude/settings.json` | — |
-| Codex CLI | recorded cwd で絞る rollout JSONL | `~/.codex/hooks.json` | compact は SessionStart で `loci prime` |
-| Oh My Pi | project JSONL | — | 各 turn 後に index、session start に server / distill / prime |
-| OpenCode | local session SQLite | — | 各 turn 後に index、session start に server / distill / prime |
-| Grok | project streaming JSONL | — | 各 turn 後に index、session start に server / distill / prime |
+| Harness | transcript | native lifecycle |
+|---------|------------|-------------------|
+| Claude Code | project JSONL | `~/.claude/settings.json` |
+| Codex CLI | recorded cwd で絞る rollout JSONL | `~/.codex/hooks.json` |
+| Grok | project streaming JSONL | `~/.grok/hooks/lociaction.json` |
+| Oh My Pi | project JSONL | `~/.omp/agent/extensions/lociaction.ts` |
+| OpenCode | local session SQLite | `~/.config/opencode/plugins/lociaction.ts` |
 
-Native hook は turn end を `loci index`、session start を `loci server start`、`loci distill`、`loci prime`、compact を `loci prime` に写像します。fallback は `loci hook install --harness NAME` が表示し、Claude settings を変更しません。
+対応する5 harnessは全て native lifecycle に完全対応しており、fallback/手動指示の経路は存在しません。turn end は `loci index` に、session start は `loci server start` + `loci distill` + `loci prime` に写像されます。compact の扱いは harness ごとに少し異なります: Claude Code と Codex CLI は compact を同じ session-start の3コマンドに畳み込みます（matcher に `compact` を含む）。Grok と OpenCode は compact 時に `loci prime` のみ実行します。Oh My Pi には compact 相当のイベントが無く、何もフックしません。`loci hook install/uninstall --harness NAME` はこれらを管理し、他の harness の設定には一切触れません。
 
 ## 検索出力
 

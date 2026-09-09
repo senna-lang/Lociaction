@@ -52,7 +52,7 @@ Requires Python 3.11+.
 loci init
 ```
 
-`loci init` creates the project-local database, writes the common `AGENTS.md` instruction section, and installs Claude Code hooks unless `--no-hooks` is supplied. Register Codex hooks explicitly with `loci hook install --harness codex`; unsupported native hooks print a complete fallback recipe. If init fails partway through, `.lociaction/` is cleaned up automatically so re-running is safe.
+`loci init` creates the project-local database, writes the common `AGENTS.md` instruction section, and installs Claude Code hooks unless `--no-hooks` is supplied. Every other supported harness (Codex, Grok, Oh My Pi, OpenCode) also has full native lifecycle hook support — register it explicitly with `loci hook install --harness <name>`. If init fails partway through, `.lociaction/` is cleaned up automatically so re-running is safe.
 
 When running `loci init`, if past session logs are detected, you'll be prompted with:
 
@@ -93,20 +93,20 @@ Invalid input on any prompt re-prompts instead of silently falling back to a def
 | `loci status` | Show index state |
 | `loci prime` | Inject command usage into the session context |
 | `loci server start/stop/status` | Embedding server management |
-| `loci hook install --harness NAME` | Install native lifecycle hooks or print the harness fallback recipe |
+| `loci hook install --harness NAME` | Install native lifecycle hooks for one of the five supported harnesses |
 | `loci hook uninstall --harness NAME` | Remove native lociaction lifecycle hooks |
 
 ## Harness Lifecycle
 
-| Harness | Transcript source | Native lifecycle | Fallback |
-|---------|-------------------|------------------|----------|
-| Claude Code | Project JSONL | `~/.claude/settings.json` | — |
-| Codex CLI | Global rollout JSONL filtered by recorded cwd | `~/.codex/hooks.json` | Compact runs `loci prime` through SessionStart |
-| Oh My Pi | Project JSONL | — | Index after each turn; run server, distill, and prime at session start |
-| OpenCode | Local session SQLite | — | Index after each turn; run server, distill, and prime at session start |
-| Grok | Project streaming JSONL | — | Index after each turn; run server, distill, and prime at session start |
+| Harness | Transcript source | Native lifecycle |
+|---------|-------------------|-------------------|
+| Claude Code | Project JSONL | `~/.claude/settings.json` |
+| Codex CLI | Global rollout JSONL filtered by recorded cwd | `~/.codex/hooks.json` |
+| Grok | Project streaming JSONL | `~/.grok/hooks/lociaction.json` |
+| Oh My Pi | Project JSONL | `~/.omp/agent/extensions/lociaction.ts` |
+| OpenCode | Local session SQLite | `~/.config/opencode/plugins/lociaction.ts` |
 
-Native hooks map turn end to `loci index`, session start to `loci server start`, `loci distill`, and `loci prime`, and compact to `loci prime`. Fallback recipes are emitted by `loci hook install --harness NAME` and never modify Claude settings.
+Every supported harness has full native lifecycle integration — no fallback/manual-instructions path exists for any of these five. Turn end maps to `loci index`, session start to `loci server start` + `loci distill` + `loci prime`. Compact handling differs slightly: Claude Code and Codex CLI fold compact into the same session-start trio (their matcher includes `compact`); Grok and OpenCode run only `loci prime` on compact; Oh My Pi has no compact-equivalent event to hook into. `loci hook install/uninstall --harness NAME` manages any of these and never touches another harness's settings.
 
 ## Search Output
 
