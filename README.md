@@ -8,7 +8,7 @@
 
 <p align="center">English · <a href="README.ja.md">日本語</a></p>
 
-An AI coding agent recalls everything it has done through just two commands: `loci search` and `loci context`. That's the whole interface. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
+An AI coding agent recalls everything it has done through two recall primitives — `loci search` and `loci context` — plus `loci recall`, a session-start convenience command that fuses both. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
 
 The CLI command `loci` is designed to be **called by the agent itself** — running `loci search "..." --json` from within a prompt. *(The name comes from the [Method of Loci](https://en.wikipedia.org/wiki/Method_of_loci) — the memory-palace technique. Under the hood, conversations are distilled into "palace objects"; see [How It Works](#how-it-works). The architecture extends the conversational memory model from [arXiv:2603.13017](https://arxiv.org/abs/2603.13017) for coding agents.)*
 
@@ -16,12 +16,13 @@ The CLI command `loci` is designed to be **called by the agent itself** — runn
 
 ## Minimal Interface
 
-The whole recall interface is two commands:
+The recall interface is built from two primitives, plus one composite:
 
 - **`loci search "query"`** — semantic search over past conversations
 - **`loci context`** — reverse lookup, by code symbol (`--symbol "name"`) or git branch (`--branch "name"`)
   - tree-sitter symbol resolution (Python / TypeScript / Go / Rust / Java / C# / Ruby) lets agents understand implementation intent before editing
   - `--branch "name"` recalls what was done and discussed on a specific git branch (also available as `loci search "query" --branch "name"`)
+- **`loci recall --file PATH --branch NAME`** — session-start warmup: merges `context` + `search`, recency-ranked, with `--file`/`--branch` combinable as AND filters
 
 That's deliberate. The user here is the agent, and an agent handed a 50-tool palette hesitates, mis-picks, and burns tokens just deciding which to call. With a surface this small — and no MCP tool schemas sitting resident in the context window — the agent reaches for the right call the first time, every time. *(When the full transcript is needed, `loci show "<exchange-id>"` expands a search result to its stored verbatim source.)*
 
