@@ -153,17 +153,17 @@ base_url = "http://localhost:11434/v1"   # Ollama
 
 `provider = "openai"` のとき `base_url` は必須です。未設定または空の場合は警告して `claude` にフォールバックします。`provider = "claude"`（既定）では `base_url` は無視され、従来どおり `claude --print` で蒸留します。
 
-### Codex CLI / Gemini CLI で蒸留する
+### 他のコーディングエージェント CLI で蒸留する
 
-[Codex CLI](https://developers.openai.com/codex/cli) や [Gemini CLI](https://github.com/google-gemini/gemini-cli) を既にインストール・認証済みなら、`claude --print` の代わりにどちらでも蒸留を実行できます — client を選ぶだけで追加設定は不要です:
+[Codex CLI](https://developers.openai.com/codex/cli)、[Gemini CLI](https://github.com/google-gemini/gemini-cli)、[Grok CLI](https://x.ai)、[OpenCode](https://opencode.ai)、[Oh My Pi](https://github.com/can1357/oh-my-pi) のいずれかを既にインストール・認証済みなら、`claude --print` の代わりに蒸留を実行できます — client を選ぶだけで追加設定は不要です:
 
 ```toml
 [distill]
-client = "codex-cli"     # または "gemini-cli"
+client = "codex-cli"     # または "gemini-cli", "grok-cli", "opencode-cli", "omp-cli"
 # model = "gpt-5-codex"  # 任意の上書き。省略時は各 CLI 自身の既定モデルを使う
 ```
 
-`codex exec` は read-only sandbox で実行し、`--output-schema` で palace object のスキーマに直接制約した応答を得ます（unwrap 不要）。`gemini --prompt --output-format json` にはスキーマ制約モードがないため、`response` フィールドを `claude --print` の `result` フィールドと同じ方法でパースします。`loci distill --setup` は両方とも自動検出し（`claude-cli` 同様 PATH 存在のみ確認）、他の Ready な client と並んで一覧表示されます。
+`codex exec --output-schema` と `grok -p --json-schema` は palace object のスキーマに直接制約した応答を返します（grok は `structuredOutput` を1段 unwrap、codex はラップなし）。`gemini --prompt --output-format json`、`opencode run --format json`、`omp -p --mode json` にはスキーマ制約モードがないため、自由テキスト/イベントストリームの中から palace object を `claude --print` の `result` フィールドと同じ方法でパースします。`loci distill --setup` は5つとも自動検出し（`claude-cli` 同様 PATH 存在のみ確認）、他の Ready な client と並んで一覧表示されます。
 
 ## Acknowledgments
 

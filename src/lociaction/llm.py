@@ -1,8 +1,10 @@
-"""LLM 呼び出しラッパー: claude --print / codex exec / gemini --prompt の非対話 CLI、
-または OpenAI 互換 API でプロンプトを実行し JSON を返す
+"""LLM 呼び出しラッパー: claude --print / codex exec / gemini --prompt / grok -p /
+opencode run / omp -p の非対話 CLI、または OpenAI 互換 API でプロンプトを実行し
+JSON を返す
 
-DistillBackend 抽象化により claude / openai / codex / gemini プロバイダ両対応。
-会話エッセンス (exchange_core, specific_context, room_assignments) を蒸留する"""
+DistillBackend 抽象化により claude / openai / codex / gemini / grok / opencode / omp
+プロバイダ両対応。会話エッセンス (exchange_core, specific_context, room_assignments)
+を蒸留する"""
 
 from __future__ import annotations
 
@@ -116,7 +118,7 @@ class DistillUnconfiguredError(Exception):
 
 @dataclass(frozen=True)
 class DistillBackend:
-    """LLM backend configuration for distillation (claude / openai / codex / gemini)"""
+    """LLM backend configuration for distillation (claude / openai / codex / gemini / grok / opencode / omp)"""
 
     provider: str
     model: str | None
@@ -163,6 +165,14 @@ def _cleanup_session_jsonl(session_dir: Path, session_id: str) -> None:
             p.unlink()
         except OSError:
             pass
+
+
+def _grok_session_dir(session_id: str) -> Path:
+    """grok -p が `--session-id` で書き出すセッションディレクトリ
+    （`~/.grok/sessions/<url-encoded-cwd>/<session-id>/`）。"""
+    from urllib.parse import quote
+
+    return Path.home() / ".grok" / "sessions" / quote(os.getcwd(), safe="") / session_id
 
 
 # ---- ヘルパー関数 ----
@@ -368,6 +378,214 @@ def _call_gemini_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"gemini 'response' field is not valid JSON: {e}") from e
 
+def _call_grok_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
+    """Call `grok -p` (single-turn headless mode) and return parsed JSON (unvalidated).
+
+    `--json-schema` constrains the response the same way codex's
+    `--output-schema` does, but grok returns the constrained object under a
+    top-level `structuredOutput` key (camelCase) alongside metadata (usage,
+    cost, thought) rather than as the entire stdout payload, so it needs one
+    level of unwrapping — falls back to parsing the `text` field as JSON if
+    `structuredOutput` is absent (schema-conformance failure), matching
+    claude's layered fallback. `grok -p` always persists a session under
+    `~/.grok/sessions/<url-encoded-cwd>/<session-id>/` — there is no
+    ephemeral/no-session flag — so a session id is generated up front and
+    its directory removed in `finally`, exactly like claude's
+    `_cleanup_session_jsonl`. `--no-subagents` is required for this cleanup
+    to be complete: without it grok may spawn subagents under their own
+    unpredictable session ids that our single `--session-id` cannot catch
+    (confirmed empirically — a plain call left 2-3 orphaned session
+    directories per invocation until this flag was added), and subagent
+    tool use is unwanted for a pure text-summarization task anyway. `model`
+    is optional so grok's own configured default model is used when unset.
+    """
+    import shutil
+
+    cli = shutil.which("grok")
+    if cli is None:
+        raise RuntimeError("grok CLI not found in PATH")
+
+    session_id = str(uuid.uuid4())
+    session_dir = _grok_session_dir(session_id)
+
+    args = [
+        cli,
+        "-p",
+        prompt,
+        "--session-id",
+        session_id,
+        "--json-schema",
+        JSON_SCHEMA,
+        "--no-subagents",
+    ]
+    if model:
+        args += ["--model", model]
+
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    finally:
+        try:
+            shutil.rmtree(session_dir)
+        except OSError:
+            pass
+
+    if result.returncode != 0:
+        raise RuntimeError(f"grok -p failed: {result.stderr}")
+
+    try:
+        outer = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"grok -p produced non-JSON stdout: {e}") from e
+
+    if isinstance(outer, dict) and outer.get("structuredOutput"):
+        return outer["structuredOutput"]
+    inner = outer.get("text", "") if isinstance(outer, dict) else ""
+    if isinstance(inner, str) and inner.strip():
+        text = _strip_json_fence(inner)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"grok -p 'text' field is not valid JSON: {e}") from e
+    raise RuntimeError("grok -p returned neither structuredOutput nor text")
+
+
+def _call_opencode_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
+    """Call `opencode run` (headless NDJSON mode) and return parsed JSON (unvalidated).
+
+    Unlike codex/grok, opencode has no schema-constrained output mode:
+    `--format json` emits an NDJSON stream of step/text/message events, so
+    the answer is the `part.text` of the (last) `text`-type event — free
+    text embedded via `_build_distill_prompt`'s in-prompt JSON instructions,
+    same unwrap pattern as gemini. `opencode run` always persists the
+    session to its local SQLite store (there is no ephemeral flag), so the
+    session id is read back from the event stream and removed via
+    `opencode session delete` in `finally` — a CLI call rather than a file
+    delete, since the store is a shared DB, not per-session files. `model`
+    is optional: omitting it uses whatever provider/model opencode already
+    has configured (`opencode providers`).
+    """
+    import shutil
+
+    cli = shutil.which("opencode")
+    if cli is None:
+        raise RuntimeError("opencode CLI not found in PATH")
+
+    args = [cli, "run", prompt, "--format", "json"]
+    if model:
+        args += ["--model", model]
+
+    result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+
+    session_id: str | None = None
+    text_parts: list[str] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("sessionID"):
+            session_id = event["sessionID"]
+        if event.get("type") == "text":
+            part = event.get("part")
+            if isinstance(part, dict):
+                text_parts.append(str(part.get("text", "")))
+
+    if session_id:
+        try:
+            subprocess.run(
+                [cli, "session", "delete", session_id],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if result.returncode != 0:
+        raise RuntimeError(f"opencode run failed: {result.stderr}")
+    if not text_parts:
+        raise RuntimeError("opencode run produced no text output")
+
+    text = _strip_json_fence(text_parts[-1])
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"opencode run output is not valid JSON: {e}") from e
+
+
+def _call_omp_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
+    """Call `omp -p` (headless NDJSON mode) and return parsed JSON (unvalidated).
+
+    Like opencode, omp has no schema-constrained output mode: `--mode json`
+    emits an NDJSON event stream (session/turn/message events), so the
+    answer is the last assistant `message_end` event's text content blocks —
+    free text embedded via `_build_distill_prompt`'s in-prompt JSON
+    instructions, same unwrap pattern as gemini/opencode. `--no-session`
+    means omp writes nothing to disk, so (unlike grok/opencode) no cleanup
+    step is needed. `--no-tools`/`--no-title` keep this a pure
+    text-summarization call with no side effects or session-title spend.
+    `model` is optional: omitting it uses whatever role/default model omp
+    already has configured.
+    """
+    import shutil
+
+    cli = shutil.which("omp")
+    if cli is None:
+        raise RuntimeError("omp CLI not found in PATH")
+
+    args = [
+        cli,
+        "-p",
+        prompt,
+        "--mode",
+        "json",
+        "--no-session",
+        "--no-tools",
+        "--no-title",
+    ]
+    if model:
+        args += ["--model", model]
+
+    result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"omp -p failed: {result.stderr}")
+
+    text_parts: list[str] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "message_end":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        text_parts = [
+            str(block.get("text", ""))
+            for block in message.get("content", [])
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+
+    if not text_parts:
+        raise RuntimeError("omp -p produced no assistant text output")
+
+    text = _strip_json_fence("".join(text_parts))
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"omp -p output is not valid JSON: {e}") from e
+
+
 
 _MAX_VALIDATION_ATTEMPTS = 2
 _MAX_NETWORK_ATTEMPTS = 3
@@ -521,6 +739,36 @@ class GeminiCliTransport:
         return _call_gemini_cli(prompt, self.model)
 
 @dataclass(frozen=True)
+class GrokCliTransport:
+    """`grok -p` CLI 経由のトランスポート（実体は _call_grok_cli）。"""
+
+    model: str | None = None
+
+    def run(self, prompt: str) -> dict[str, Any]:
+        return _call_grok_cli(prompt, self.model)
+
+
+@dataclass(frozen=True)
+class OpenCodeCliTransport:
+    """`opencode run` CLI 経由のトランスポート（実体は _call_opencode_cli）。"""
+
+    model: str | None = None
+
+    def run(self, prompt: str) -> dict[str, Any]:
+        return _call_opencode_cli(prompt, self.model)
+
+
+@dataclass(frozen=True)
+class OmpCliTransport:
+    """`omp -p` CLI 経由のトランスポート（実体は _call_omp_cli）。"""
+
+    model: str | None = None
+
+    def run(self, prompt: str) -> dict[str, Any]:
+        return _call_omp_cli(prompt, self.model)
+
+
+@dataclass(frozen=True)
 class OpenAICompatTransport:
     """OpenAI 互換 chat/completions 経由のトランスポート（実体は _call_openai、#15 のリトライ込み）。"""
 
@@ -538,6 +786,12 @@ def _build_transport(backend: DistillBackend) -> DistillTransport:
         return CodexCliTransport(backend.model)
     if backend.provider == "gemini":
         return GeminiCliTransport(backend.model)
+    if backend.provider == "grok":
+        return GrokCliTransport(backend.model)
+    if backend.provider == "opencode":
+        return OpenCodeCliTransport(backend.model)
+    if backend.provider == "omp":
+        return OmpCliTransport(backend.model)
     return ClaudeCliTransport(backend.model)
 
 

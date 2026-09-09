@@ -21,7 +21,16 @@ DEFAULT_DISTILL_MIN_CHARS = 100
 DEFAULT_DISTILL_PROVIDER = "claude"
 VALID_DISTILL_PROVIDERS = frozenset({"claude", "openai"})
 VALID_DISTILL_CLIENT_IDS = frozenset(
-    {"ollama-ft", "claude-cli", "openai-compat", "codex-cli", "gemini-cli"}
+    {
+        "ollama-ft",
+        "claude-cli",
+        "openai-compat",
+        "codex-cli",
+        "gemini-cli",
+        "grok-cli",
+        "opencode-cli",
+        "omp-cli",
+    }
 )
 
 # ローカル蒸留モデル（`loci init` の対話プロンプトで opt-in した場合のデフォルト値）。

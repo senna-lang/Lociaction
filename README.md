@@ -160,17 +160,17 @@ base_url = "http://localhost:11434/v1"   # Ollama
 
 `loci init` offers to set this up for you automatically with [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller), a model fine-tuned specifically for this task (see the prompt above) — no manual config needed if you accept it.
 
-### Distilling with Codex CLI or Gemini CLI
+### Distilling with another coding-agent CLI
 
-If you already have [Codex CLI](https://developers.openai.com/codex/cli) or [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated, either can run distillation instead of `claude --print` — no extra config beyond selecting the client:
+If you already have [Codex CLI](https://developers.openai.com/codex/cli), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Grok CLI](https://x.ai), [OpenCode](https://opencode.ai), or [Oh My Pi](https://github.com/can1357/oh-my-pi) installed and authenticated, any of them can run distillation instead of `claude --print` — no extra config beyond selecting the client:
 
 ```toml
 [distill]
-client = "codex-cli"     # or "gemini-cli"
+client = "codex-cli"     # or "gemini-cli", "grok-cli", "opencode-cli", "omp-cli"
 # model = "gpt-5-codex"  # optional override; omit to use the CLI's own configured default
 ```
 
-`codex exec` runs in a read-only sandbox with `--output-schema` constraining the response to the palace-object schema directly (no wrapper to parse). `gemini --prompt --output-format json` has no schema-constrained mode, so its `response` field is parsed the same way as `claude --print`'s `result` field. `loci distill --setup` detects both automatically (PATH presence only, like `claude-cli`) and lists them alongside the other ready clients.
+`codex exec --output-schema` and `grok -p --json-schema` constrain the response to the palace-object schema directly (`structuredOutput` unwraps in one step for grok, no wrapper at all for codex). `gemini --prompt --output-format json`, `opencode run --format json`, and `omp -p --mode json` have no schema-constrained mode, so the palace object is parsed out of their free-text/event-stream output the same way `claude --print`'s `result` field is unwrapped. `loci distill --setup` detects all five automatically (PATH presence only, like `claude-cli`) and lists them alongside the other ready clients.
 
 ## Acknowledgments
 

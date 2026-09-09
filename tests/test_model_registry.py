@@ -10,7 +10,10 @@ from lociaction.adapters.model.registry import (
     detect_claude_cli,
     detect_codex_cli,
     detect_gemini_cli,
+    detect_grok_cli,
     detect_ollama_ft,
+    detect_omp_cli,
+    detect_opencode_cli,
     discover,
     ready_clients,
     recommended_id,
@@ -123,6 +126,66 @@ def test_detect_gemini_cli_ready(monkeypatch) -> None:
     assert status.client.provider == "gemini"
     assert status.client.model is None
 
+
+# ---- detect_grok_cli ----
+
+
+def test_detect_grok_cli_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    status = detect_grok_cli()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_grok_cli_ready(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/grok")
+    status = detect_grok_cli()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "grok-cli"
+    assert status.client.provider == "grok"
+    assert status.client.model is None
+
+
+# ---- detect_opencode_cli ----
+
+
+def test_detect_opencode_cli_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    status = detect_opencode_cli()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_opencode_cli_ready(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/opencode")
+    status = detect_opencode_cli()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "opencode-cli"
+    assert status.client.provider == "opencode"
+    assert status.client.model is None
+
+
+# ---- detect_omp_cli ----
+
+
+def test_detect_omp_cli_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    status = detect_omp_cli()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_omp_cli_ready(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/omp")
+    status = detect_omp_cli()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "omp-cli"
+    assert status.client.provider == "omp"
+    assert status.client.model is None
+
 # ---- discover / ready_clients / recommended_id ----
 
 
@@ -134,6 +197,9 @@ def test_discover_returns_ollama_then_claude_order(monkeypatch) -> None:
         "claude-cli",
         "codex-cli",
         "gemini-cli",
+        "grok-cli",
+        "opencode-cli",
+        "omp-cli",
     ]
 
 
@@ -254,6 +320,60 @@ def test_resolve_client_gemini_cli_model_none_when_unconfigured() -> None:
 
     cfg = Config(distill_model=None)
     client = resolve_client("gemini-cli", cfg)
+    assert client.model is None
+
+
+def test_resolve_client_grok_cli_passes_through_configured_model() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model="grok-4.6")
+    client = resolve_client("grok-cli", cfg)
+    assert client.provider == "grok"
+    assert client.model == "grok-4.6"
+    assert client.base_url is None
+
+
+def test_resolve_client_grok_cli_model_none_when_unconfigured() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model=None)
+    client = resolve_client("grok-cli", cfg)
+    assert client.model is None
+
+
+def test_resolve_client_opencode_cli_passes_through_configured_model() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model="opencode/big-pickle")
+    client = resolve_client("opencode-cli", cfg)
+    assert client.provider == "opencode"
+    assert client.model == "opencode/big-pickle"
+    assert client.base_url is None
+
+
+def test_resolve_client_opencode_cli_model_none_when_unconfigured() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model=None)
+    client = resolve_client("opencode-cli", cfg)
+    assert client.model is None
+
+
+def test_resolve_client_omp_cli_passes_through_configured_model() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model="haiku")
+    client = resolve_client("omp-cli", cfg)
+    assert client.provider == "omp"
+    assert client.model == "haiku"
+    assert client.base_url is None
+
+
+def test_resolve_client_omp_cli_model_none_when_unconfigured() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model=None)
+    client = resolve_client("omp-cli", cfg)
     assert client.model is None
 
 

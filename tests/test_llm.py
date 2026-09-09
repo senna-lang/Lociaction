@@ -18,7 +18,11 @@ from lociaction.llm import (
     _call_claude_cli,
     _call_codex_cli,
     _call_gemini_cli,
+    _call_grok_cli,
+    _call_omp_cli,
     _call_openai,
+    _call_opencode_cli,
+    _grok_session_dir,
     _strip_json_fence,
     _validate_palace,
     call_claude,
@@ -957,3 +961,450 @@ def test_call_openai_raises_after_network_retries_exhausted() -> None:
                 _call_openai("prompt", backend)
 
     assert mock_urlopen.call_count == _MAX_NETWORK_ATTEMPTS
+
+
+# ---- _call_grok_cli ----
+
+
+def test_call_grok_cli_command_args() -> None:
+    """
+    subprocess.run をモックし、`grok -p` 実行時のコマンドリストに
+    -p, prompt, --session-id, --json-schema, --no-subagents, --model が
+    含まれることを assert する
+    """
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"structuredOutput": MOCK_JSON_RESPONSE["structured_output"]}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            _call_grok_cli("test prompt", model="grok-4.6")
+
+            cmd_list = mock_run.call_args[0][0]
+            assert cmd_list[0] == "/usr/bin/grok"
+            assert "-p" in cmd_list
+            assert "test prompt" in cmd_list
+            assert "--session-id" in cmd_list
+            assert "--json-schema" in cmd_list
+            assert "--no-subagents" in cmd_list
+            assert "--model" in cmd_list
+            assert "grok-4.6" in cmd_list
+
+
+def test_call_grok_cli_omits_model_override_when_none() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"structuredOutput": MOCK_JSON_RESPONSE["structured_output"]}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            _call_grok_cli("test prompt")
+            cmd_list = mock_run.call_args[0][0]
+            assert "--model" not in cmd_list
+
+
+def test_call_grok_cli_returns_structured_output() -> None:
+    """`structuredOutput` フィールドをそのまま返す（unwrap 不要）"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"structuredOutput": MOCK_JSON_RESPONSE["structured_output"]}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            result = _call_grok_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_grok_cli_falls_back_to_text_field() -> None:
+    """structuredOutput が欠落していれば `text` フィールドをパースする"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"text": json.dumps(MOCK_JSON_RESPONSE["structured_output"])}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            result = _call_grok_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_grok_cli_not_found_raises() -> None:
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="grok CLI not found"):
+            _call_grok_cli("prompt")
+
+
+def test_call_grok_cli_nonzero_exit_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = "boom"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            with pytest.raises(RuntimeError, match="grok -p failed"):
+                _call_grok_cli("prompt")
+
+
+def test_call_grok_cli_non_json_stdout_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "not json"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            with pytest.raises(RuntimeError, match="non-JSON stdout"):
+                _call_grok_cli("prompt")
+
+
+def test_call_grok_cli_neither_field_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps({"stopReason": "end_turn"})
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            with pytest.raises(
+                RuntimeError, match="neither structuredOutput nor text"
+            ):
+                _call_grok_cli("prompt")
+
+
+def test_call_grok_cli_cleans_up_session_dir_on_success(tmp_path: Path) -> None:
+    """grok は --no-session 相当のフラグを持たないため、自分自身の
+    --session-id ディレクトリを finally で明示削除することを確認する。"""
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):
+        session_id = cmd[cmd.index("--session-id") + 1]
+        captured["session_id"] = session_id
+        (tmp_path / session_id).mkdir()
+        (tmp_path / session_id / "chat_history.jsonl").write_text("{}\n")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(
+            {"structuredOutput": MOCK_JSON_RESPONSE["structured_output"]}
+        )
+        return mock_result
+
+    with patch("lociaction.llm.subprocess.run", side_effect=fake_run):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            with patch(
+                "lociaction.llm._grok_session_dir",
+                side_effect=lambda session_id: tmp_path / session_id,
+            ):
+                _call_grok_cli("test prompt")
+
+    assert not (tmp_path / captured["session_id"]).exists()
+
+
+def test_call_grok_cli_cleans_up_session_dir_on_timeout(tmp_path: Path) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):
+        session_id = cmd[cmd.index("--session-id") + 1]
+        captured["session_id"] = session_id
+        (tmp_path / session_id).mkdir()
+        raise subprocess.TimeoutExpired("grok", 300)
+
+    with patch("lociaction.llm.subprocess.run", side_effect=fake_run):
+        with patch("shutil.which", return_value="/usr/bin/grok"):
+            with patch(
+                "lociaction.llm._grok_session_dir",
+                side_effect=lambda session_id: tmp_path / session_id,
+            ):
+                with pytest.raises(subprocess.TimeoutExpired):
+                    _call_grok_cli("test prompt")
+
+    assert not (tmp_path / captured["session_id"]).exists()
+
+
+def test_grok_session_dir_scopes_by_cwd_and_session_id() -> None:
+    """`~/.grok/sessions/<url-encoded-cwd>/<session-id>` の形に組み立てる"""
+    with patch("lociaction.llm.os.getcwd", return_value="/tmp/proj"):
+        result = _grok_session_dir("abc-123")
+    assert str(result).endswith("/.grok/sessions/%2Ftmp%2Fproj/abc-123")
+
+
+# ---- _call_opencode_cli ----
+
+
+def _opencode_ndjson(text: str, session_id: str = "ses_test123") -> str:
+    events = [
+        {"type": "step_start", "sessionID": session_id},
+        {
+            "type": "text",
+            "sessionID": session_id,
+            "part": {"type": "text", "text": text},
+        },
+        {"type": "step_finish", "sessionID": session_id},
+    ]
+    return "\n".join(json.dumps(e) for e in events)
+
+
+def test_call_opencode_cli_command_args() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _opencode_ndjson(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            _call_opencode_cli("test prompt", model="opencode/big-pickle")
+
+            cmd_list = mock_run.call_args_list[0][0][0]
+            assert cmd_list[0] == "/usr/bin/opencode"
+            assert cmd_list[1] == "run"
+            assert "test prompt" in cmd_list
+            assert "--format" in cmd_list
+            assert "json" in cmd_list
+            assert "--model" in cmd_list
+            assert "opencode/big-pickle" in cmd_list
+
+
+def test_call_opencode_cli_omits_model_override_when_none() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _opencode_ndjson(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            _call_opencode_cli("test prompt")
+            cmd_list = mock_run.call_args_list[0][0][0]
+            assert "--model" not in cmd_list
+
+
+def test_call_opencode_cli_returns_dict_from_last_text_event() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _opencode_ndjson(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            result = _call_opencode_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_opencode_cli_deletes_session_after_run() -> None:
+    """opencode はセッションを SQLite に永続化するため、`session delete` を
+    finally 相当で呼び出すことを確認する（ファイル削除ではなく CLI 経由）。"""
+    run_result = MagicMock()
+    run_result.returncode = 0
+    run_result.stdout = _opencode_ndjson(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"]), session_id="ses_abc"
+    )
+    delete_result = MagicMock()
+    delete_result.returncode = 0
+
+    with patch(
+        "lociaction.llm.subprocess.run", side_effect=[run_result, delete_result]
+    ) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            _call_opencode_cli("prompt")
+
+    assert mock_run.call_count == 2
+    delete_cmd = mock_run.call_args_list[1][0][0]
+    assert delete_cmd == ["/usr/bin/opencode", "session", "delete", "ses_abc"]
+
+
+def test_call_opencode_cli_not_found_raises() -> None:
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="opencode CLI not found"):
+            _call_opencode_cli("prompt")
+
+
+def test_call_opencode_cli_nonzero_exit_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stdout = ""
+    mock_result.stderr = "boom"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            with pytest.raises(RuntimeError, match="opencode run failed"):
+                _call_opencode_cli("prompt")
+
+
+def test_call_opencode_cli_no_text_event_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps({"type": "step_start", "sessionID": "ses_x"})
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            with pytest.raises(RuntimeError, match="produced no text output"):
+                _call_opencode_cli("prompt")
+
+
+def test_call_opencode_cli_non_json_text_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _opencode_ndjson("not json")
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/opencode"):
+            with pytest.raises(RuntimeError, match="output is not valid JSON"):
+                _call_opencode_cli("prompt")
+
+
+# ---- _call_omp_cli ----
+
+
+def _omp_message_end(text: str, role: str = "assistant") -> str:
+    events = [
+        {"type": "session"},
+        {
+            "type": "message_end",
+            "message": {"role": role, "content": [{"type": "text", "text": text}]},
+        },
+    ]
+    return "\n".join(json.dumps(e) for e in events)
+
+
+def test_call_omp_cli_command_args() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _omp_message_end(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            _call_omp_cli("test prompt", model="haiku")
+
+            cmd_list = mock_run.call_args[0][0]
+            assert cmd_list[0] == "/usr/bin/omp"
+            assert "-p" in cmd_list
+            assert "test prompt" in cmd_list
+            assert "--mode" in cmd_list
+            assert "json" in cmd_list
+            assert "--no-session" in cmd_list
+            assert "--no-tools" in cmd_list
+            assert "--no-title" in cmd_list
+            assert "--model" in cmd_list
+            assert "haiku" in cmd_list
+
+
+def test_call_omp_cli_omits_model_override_when_none() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _omp_message_end(
+        json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            _call_omp_cli("test prompt")
+            cmd_list = mock_run.call_args[0][0]
+            assert "--model" not in cmd_list
+
+
+def test_call_omp_cli_returns_dict_from_last_assistant_message() -> None:
+    """複数の message_end イベントがあっても、最後の assistant イベントを採用する"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    first = json.dumps(
+        {
+            "type": "message_end",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        }
+    )
+    second = _omp_message_end(json.dumps(MOCK_JSON_RESPONSE["structured_output"]))
+    mock_result.stdout = first + "\n" + second
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            result = _call_omp_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_omp_cli_not_found_raises() -> None:
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="omp CLI not found"):
+            _call_omp_cli("prompt")
+
+
+def test_call_omp_cli_nonzero_exit_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = "boom"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            with pytest.raises(RuntimeError, match="omp -p failed"):
+                _call_omp_cli("prompt")
+
+
+def test_call_omp_cli_no_assistant_message_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps({"type": "session"})
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            with pytest.raises(RuntimeError, match="produced no assistant text"):
+                _call_omp_cli("prompt")
+
+
+def test_call_omp_cli_non_json_text_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _omp_message_end("not json")
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/omp"):
+            with pytest.raises(RuntimeError, match="output is not valid JSON"):
+                _call_omp_cli("prompt")
+
+
+# ---- _build_transport dispatch: grok / opencode / omp ----
+
+
+def test_call_claude_dispatches_to_grok_backend() -> None:
+    backend = DistillBackend(provider="grok", model="grok-4.6", base_url=None)
+
+    with patch("lociaction.llm._call_grok_cli") as mock_call_grok_cli:
+        mock_call_grok_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
+        call_claude("prompt", backend=backend)
+
+        assert mock_call_grok_cli.called
+        call_args = mock_call_grok_cli.call_args
+        assert call_args[0][0] == "prompt"
+        assert call_args[0][1] == "grok-4.6"
+
+
+def test_call_claude_dispatches_to_opencode_backend() -> None:
+    backend = DistillBackend(provider="opencode", model=None, base_url=None)
+
+    with patch("lociaction.llm._call_opencode_cli") as mock_call_opencode_cli:
+        mock_call_opencode_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
+        call_claude("prompt", backend=backend)
+
+        assert mock_call_opencode_cli.called
+        call_args = mock_call_opencode_cli.call_args
+        assert call_args[0][0] == "prompt"
+        assert call_args[0][1] is None
+
+
+def test_call_claude_dispatches_to_omp_backend() -> None:
+    backend = DistillBackend(provider="omp", model=None, base_url=None)
+
+    with patch("lociaction.llm._call_omp_cli") as mock_call_omp_cli:
+        mock_call_omp_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
+        call_claude("prompt", backend=backend)
+
+        assert mock_call_omp_cli.called
+        call_args = mock_call_omp_cli.call_args
+        assert call_args[0][0] == "prompt"
+        assert call_args[0][1] is None

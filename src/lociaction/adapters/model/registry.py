@@ -16,7 +16,15 @@ from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
 
 # v1 で discover() が調べる client id（表示順 = recommended 優先度）
-DISCOVERABLE_CLIENT_IDS = ("ollama-ft", "claude-cli", "codex-cli", "gemini-cli")
+DISCOVERABLE_CLIENT_IDS = (
+    "ollama-ft",
+    "claude-cli",
+    "codex-cli",
+    "gemini-cli",
+    "grok-cli",
+    "opencode-cli",
+    "omp-cli",
+)
 
 
 def _ollama_model_pulled(model: str) -> bool:
@@ -143,12 +151,86 @@ def detect_gemini_cli() -> ClientStatus:
         ),
     )
 
+def detect_grok_cli() -> ClientStatus:
+    """grok CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
+    if shutil.which("grok") is None:
+        return ClientStatus(
+            id="grok-cli",
+            label="Grok CLI",
+            state="unavailable",
+            reason="grok CLI not found in PATH",
+        )
+    return ClientStatus(
+        id="grok-cli",
+        label="Grok CLI",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="grok-cli",
+            provider="grok",
+            model=None,
+            base_url=None,
+            label="Grok CLI",
+        ),
+    )
+
+
+def detect_opencode_cli() -> ClientStatus:
+    """opencode CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
+    if shutil.which("opencode") is None:
+        return ClientStatus(
+            id="opencode-cli",
+            label="OpenCode CLI",
+            state="unavailable",
+            reason="opencode CLI not found in PATH",
+        )
+    return ClientStatus(
+        id="opencode-cli",
+        label="OpenCode CLI",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="opencode-cli",
+            provider="opencode",
+            model=None,
+            base_url=None,
+            label="OpenCode CLI",
+        ),
+    )
+
+
+def detect_omp_cli() -> ClientStatus:
+    """omp CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
+    if shutil.which("omp") is None:
+        return ClientStatus(
+            id="omp-cli",
+            label="Oh My Pi CLI",
+            state="unavailable",
+            reason="omp CLI not found in PATH",
+        )
+    return ClientStatus(
+        id="omp-cli",
+        label="Oh My Pi CLI",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="omp-cli",
+            provider="omp",
+            model=None,
+            base_url=None,
+            label="Oh My Pi CLI",
+        ),
+    )
+
 
 _DETECTORS = {
     "ollama-ft": detect_ollama_ft,
     "claude-cli": detect_claude_cli,
     "codex-cli": detect_codex_cli,
     "gemini-cli": detect_gemini_cli,
+    "grok-cli": detect_grok_cli,
+    "opencode-cli": detect_opencode_cli,
+    "omp-cli": detect_omp_cli,
 }
 
 
@@ -234,6 +316,30 @@ def resolve_client(client_id: str, cfg) -> ModelClient:
             model=cfg.distill_model,
             base_url=None,
             label="Gemini CLI",
+        )
+    if client_id == "grok-cli":
+        return ModelClient(
+            id="grok-cli",
+            provider="grok",
+            model=cfg.distill_model,
+            base_url=None,
+            label="Grok CLI",
+        )
+    if client_id == "opencode-cli":
+        return ModelClient(
+            id="opencode-cli",
+            provider="opencode",
+            model=cfg.distill_model,
+            base_url=None,
+            label="OpenCode CLI",
+        )
+    if client_id == "omp-cli":
+        return ModelClient(
+            id="omp-cli",
+            provider="omp",
+            model=cfg.distill_model,
+            base_url=None,
+            label="Oh My Pi CLI",
         )
     if client_id == "openai-compat":
         if not cfg.distill_base_url:
