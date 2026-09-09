@@ -20,7 +20,9 @@ DEFAULT_INDEX_MIN_CHARS = 50
 DEFAULT_DISTILL_MIN_CHARS = 100
 DEFAULT_DISTILL_PROVIDER = "claude"
 VALID_DISTILL_PROVIDERS = frozenset({"claude", "openai"})
-VALID_DISTILL_CLIENT_IDS = frozenset({"ollama-ft", "claude-cli", "openai-compat"})
+VALID_DISTILL_CLIENT_IDS = frozenset(
+    {"ollama-ft", "claude-cli", "openai-compat", "codex-cli", "gemini-cli"}
+)
 
 # ローカル蒸留モデル（`loci init` の対話プロンプトで opt-in した場合のデフォルト値）。
 # GGUF は Ollama 経由で hf.co/<repo>:<quant> の形式で直接 pull できる。

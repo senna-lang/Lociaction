@@ -16,7 +16,7 @@ from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
 
 # v1 で discover() が調べる client id（表示順 = recommended 優先度）
-DISCOVERABLE_CLIENT_IDS = ("ollama-ft", "claude-cli")
+DISCOVERABLE_CLIENT_IDS = ("ollama-ft", "claude-cli", "codex-cli", "gemini-cli")
 
 
 def _ollama_model_pulled(model: str) -> bool:
@@ -95,14 +95,65 @@ def detect_claude_cli() -> ClientStatus:
     )
 
 
+
+def detect_codex_cli() -> ClientStatus:
+    """codex CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
+    if shutil.which("codex") is None:
+        return ClientStatus(
+            id="codex-cli",
+            label="Codex CLI",
+            state="unavailable",
+            reason="codex CLI not found in PATH",
+        )
+    return ClientStatus(
+        id="codex-cli",
+        label="Codex CLI",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="codex-cli",
+            provider="codex",
+            model=None,
+            base_url=None,
+            label="Codex CLI",
+        ),
+    )
+
+
+def detect_gemini_cli() -> ClientStatus:
+    """gemini CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
+    if shutil.which("gemini") is None:
+        return ClientStatus(
+            id="gemini-cli",
+            label="Gemini CLI",
+            state="unavailable",
+            reason="gemini CLI not found in PATH",
+        )
+    return ClientStatus(
+        id="gemini-cli",
+        label="Gemini CLI",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="gemini-cli",
+            provider="gemini",
+            model=None,
+            base_url=None,
+            label="Gemini CLI",
+        ),
+    )
+
+
 _DETECTORS = {
     "ollama-ft": detect_ollama_ft,
     "claude-cli": detect_claude_cli,
+    "codex-cli": detect_codex_cli,
+    "gemini-cli": detect_gemini_cli,
 }
 
 
 def discover() -> list[ClientStatus]:
-    """v1 必須 client を検出順（ollama-ft, claude-cli）で返す"""
+    """v1 必須 client を検出順（ollama-ft, claude-cli, codex-cli, gemini-cli）で返す"""
     return [_DETECTORS[client_id]() for client_id in DISCOVERABLE_CLIENT_IDS]
 
 
@@ -168,6 +219,22 @@ def resolve_client(client_id: str, cfg) -> ModelClient:
             base_url=cfg.distill_base_url or LOCAL_DISTILL_BASE_URL,
             label="Ollama (local FT model)",
         )
+    if client_id == "codex-cli":
+        return ModelClient(
+            id="codex-cli",
+            provider="codex",
+            model=cfg.distill_model,
+            base_url=None,
+            label="Codex CLI",
+        )
+    if client_id == "gemini-cli":
+        return ModelClient(
+            id="gemini-cli",
+            provider="gemini",
+            model=cfg.distill_model,
+            base_url=None,
+            label="Gemini CLI",
+        )
     if client_id == "openai-compat":
         if not cfg.distill_base_url:
             raise ValueError("openai-compat client requires distill.base_url")
@@ -217,7 +284,10 @@ def write_client_config(config_path, client: ModelClient) -> None:
     distill = dict(existing.get("distill", {}))
     distill.pop("provider", None)
     distill["client"] = client.id
-    distill["model"] = client.model
+    if client.model:
+        distill["model"] = client.model
+    else:
+        distill.pop("model", None)
     if client.base_url:
         distill["base_url"] = client.base_url
     else:

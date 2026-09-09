@@ -8,6 +8,8 @@ from lociaction.adapters.model.registry import (
     _ollama_model_pulled,
     check_ready,
     detect_claude_cli,
+    detect_codex_cli,
+    detect_gemini_cli,
     detect_ollama_ft,
     discover,
     ready_clients,
@@ -81,13 +83,58 @@ def test_detect_claude_cli_ready(monkeypatch) -> None:
     assert status.client.provider == "claude"
 
 
+
+# ---- detect_codex_cli ----
+
+
+def test_detect_codex_cli_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    status = detect_codex_cli()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_codex_cli_ready(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/codex")
+    status = detect_codex_cli()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "codex-cli"
+    assert status.client.provider == "codex"
+    assert status.client.model is None
+
+
+# ---- detect_gemini_cli ----
+
+
+def test_detect_gemini_cli_missing(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    status = detect_gemini_cli()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_gemini_cli_ready(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/gemini")
+    status = detect_gemini_cli()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "gemini-cli"
+    assert status.client.provider == "gemini"
+    assert status.client.model is None
+
 # ---- discover / ready_clients / recommended_id ----
 
 
 def test_discover_returns_ollama_then_claude_order(monkeypatch) -> None:
     monkeypatch.setattr("shutil.which", lambda name: None)
     statuses = discover()
-    assert [s.id for s in statuses] == ["ollama-ft", "claude-cli"]
+    assert [s.id for s in statuses] == [
+        "ollama-ft",
+        "claude-cli",
+        "codex-cli",
+        "gemini-cli",
+    ]
 
 
 def test_ready_clients_filters_by_state() -> None:
@@ -174,6 +221,42 @@ def test_resolve_client_ollama_ft_uses_config_overrides() -> None:
     assert client.base_url == "http://x:1/v1"
 
 
+def test_resolve_client_codex_cli_passes_through_configured_model() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model="gpt-5-codex")
+    client = resolve_client("codex-cli", cfg)
+    assert client.provider == "codex"
+    assert client.model == "gpt-5-codex"
+    assert client.base_url is None
+
+
+def test_resolve_client_codex_cli_model_none_when_unconfigured() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model=None)
+    client = resolve_client("codex-cli", cfg)
+    assert client.model is None
+
+
+def test_resolve_client_gemini_cli_passes_through_configured_model() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model="gemini-2.5-pro")
+    client = resolve_client("gemini-cli", cfg)
+    assert client.provider == "gemini"
+    assert client.model == "gemini-2.5-pro"
+    assert client.base_url is None
+
+
+def test_resolve_client_gemini_cli_model_none_when_unconfigured() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(distill_model=None)
+    client = resolve_client("gemini-cli", cfg)
+    assert client.model is None
+
+
 def test_resolve_client_openai_compat_requires_base_url() -> None:
     from lociaction.config import Config
 
@@ -231,6 +314,48 @@ def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
     assert f'model = "{LOCAL_DISTILL_MODEL}"' in content
     assert f'base_url = "{LOCAL_DISTILL_BASE_URL}"' in content
     assert "provider" not in content
+
+
+def test_write_client_config_omits_model_key_when_none(tmp_path) -> None:
+    """codex-cli/gemini-cli は model=None を許容する — TOML に `model = None` を
+    書こうとすると tomli_w が壊れるので、鍵ごと省略されることを確認する。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    client = ModelClient(
+        id="codex-cli",
+        provider="codex",
+        model=None,
+        base_url=None,
+        label="Codex CLI",
+    )
+    write_client_config(config_path, client)
+    content = config_path.read_text()
+    assert 'client = "codex-cli"' in content
+    assert "model" not in content
+
+
+def test_write_client_config_removes_stale_model_when_switching_to_none(
+    tmp_path,
+) -> None:
+    """既存 config に model が残っていても、新しい client が model=None なら
+    古い値を引きずらず削除する。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[distill]\nclient = "claude-cli"\nmodel = "old-model"\n')
+    client = ModelClient(
+        id="gemini-cli",
+        provider="gemini",
+        model=None,
+        base_url=None,
+        label="Gemini CLI",
+    )
+    write_client_config(config_path, client)
+    content = config_path.read_text()
+    assert 'client = "gemini-cli"' in content
+    assert "old-model" not in content
+    assert "model" not in content
 
 
 def test_write_client_config_drops_legacy_provider_key(tmp_path) -> None:

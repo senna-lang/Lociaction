@@ -1,6 +1,7 @@
-"""LLM 呼び出しラッパー: claude --print または OpenAI API でプロンプトを実行し JSON を返す
+"""LLM 呼び出しラッパー: claude --print / codex exec / gemini --prompt の非対話 CLI、
+または OpenAI 互換 API でプロンプトを実行し JSON を返す
 
-DistillBackend 抽象化により claude / openai プロバイダ両対応。
+DistillBackend 抽象化により claude / openai / codex / gemini プロバイダ両対応。
 会話エッセンス (exchange_core, specific_context, room_assignments) を蒸留する"""
 
 from __future__ import annotations
@@ -76,11 +77,21 @@ JSON_SCHEMA = json.dumps(
                             "maximum": 1,
                         },
                     },
-                    "required": ["room_type", "room_key", "room_label", "relevance"],
+                    "required": [
+                        "room_type",
+                        "room_key",
+                        "room_label",
+                        "relevance",
+                    ],
+                    # codex exec --output-schema goes through the OpenAI
+                    # Responses API in strict mode, which rejects any object
+                    # schema (root or nested) missing this field.
+                    "additionalProperties": False,
                 },
             },
         },
         "required": ["exchange_core", "specific_context", "room_assignments"],
+        "additionalProperties": False,
     }
 )
 
@@ -105,10 +116,10 @@ class DistillUnconfiguredError(Exception):
 
 @dataclass(frozen=True)
 class DistillBackend:
-    """LLM backend configuration for distillation (claude or openai)"""
+    """LLM backend configuration for distillation (claude / openai / codex / gemini)"""
 
     provider: str
-    model: str
+    model: str | None
     base_url: str | None
 
     @classmethod
@@ -257,6 +268,107 @@ def _call_claude_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
     return outer
 
 
+def _call_codex_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
+    """Call `codex exec` CLI and return parsed JSON (unvalidated).
+
+    `--output-schema` constrains the final response to JSON_SCHEMA, so stdout
+    is the raw JSON object directly (no `result`/`structured_output` wrapper
+    to unwrap, unlike claude/gemini). Runs in the default read-only sandbox
+    (this is a pure text-summarization task, no file edits needed) and skips
+    the git-repo requirement, since a project need not be git-initialized to
+    use `loci`. `model` is optional: when unset, codex uses whatever model is
+    already configured in `~/.codex/config.toml` rather than a hardcoded
+    default this module would have to keep in sync with codex's own defaults.
+    """
+    import shutil
+    import tempfile
+
+    cli = shutil.which("codex")
+    if cli is None:
+        raise RuntimeError("codex CLI not found in PATH")
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False
+    ) as schema_file:
+        schema_file.write(JSON_SCHEMA)
+        schema_path = schema_file.name
+
+    args = [
+        cli,
+        "exec",
+        prompt,
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "--output-schema",
+        schema_path,
+    ]
+    if model:
+        args += ["-c", f"model={model}"]
+
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    finally:
+        os.unlink(schema_path)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"codex exec failed: {result.stderr}")
+
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"codex exec produced non-JSON stdout: {e}") from e
+
+
+def _call_gemini_cli(prompt: str, model: str | None = None) -> dict[str, Any]:
+    """Call `gemini --prompt` in headless mode and return parsed JSON (unvalidated).
+
+    Unlike codex, gemini-cli has no `--output-schema`-style structured-output
+    mode: `--output-format json` wraps the model's raw text in a `response`
+    field, so the JSON we actually want is embedded inside that field as text
+    (per `_build_distill_prompt`'s in-prompt JSON instructions) and must be
+    unwrapped the same way `_call_claude_cli` unwraps its `result` field.
+    `model` is optional for the same reason as codex: let gemini use its own
+    configured default when unset.
+    """
+    import shutil
+
+    cli = shutil.which("gemini")
+    if cli is None:
+        raise RuntimeError("gemini CLI not found in PATH")
+
+    args = [cli, "--prompt", prompt, "--output-format", "json"]
+    if model:
+        args += ["--model", model]
+
+    result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"gemini failed: {result.stderr}")
+
+    try:
+        outer = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"gemini produced non-JSON stdout: {e}") from e
+
+    if isinstance(outer, dict) and outer.get("error"):
+        raise RuntimeError(f"gemini returned an error: {outer['error']}")
+
+    inner = outer.get("response", "") if isinstance(outer, dict) else ""
+    if not (isinstance(inner, str) and inner.strip()):
+        raise RuntimeError("gemini 'response' field was empty")
+    text = _strip_json_fence(inner)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"gemini 'response' field is not valid JSON: {e}") from e
+
+
 _MAX_VALIDATION_ATTEMPTS = 2
 _MAX_NETWORK_ATTEMPTS = 3
 _NETWORK_RETRY_BACKOFF_SECONDS = 1.0
@@ -388,6 +500,26 @@ class ClaudeCliTransport:
         return _call_claude_cli(prompt, self.model)
 
 
+
+@dataclass(frozen=True)
+class CodexCliTransport:
+    """`codex exec` CLI 経由のトランスポート（実体は _call_codex_cli）。"""
+
+    model: str | None = None
+
+    def run(self, prompt: str) -> dict[str, Any]:
+        return _call_codex_cli(prompt, self.model)
+
+
+@dataclass(frozen=True)
+class GeminiCliTransport:
+    """`gemini --prompt` CLI 経由のトランスポート（実体は _call_gemini_cli）。"""
+
+    model: str | None = None
+
+    def run(self, prompt: str) -> dict[str, Any]:
+        return _call_gemini_cli(prompt, self.model)
+
 @dataclass(frozen=True)
 class OpenAICompatTransport:
     """OpenAI 互換 chat/completions 経由のトランスポート（実体は _call_openai、#15 のリトライ込み）。"""
@@ -399,9 +531,13 @@ class OpenAICompatTransport:
 
 
 def _build_transport(backend: DistillBackend) -> DistillTransport:
-    """DistillBackend から transport を組み立てる（3つ目の provider 追加時はここに1行足すだけ）。"""
+    """DistillBackend から transport を組み立てる（新 provider 追加時はここに1行足すだけ）。"""
     if backend.provider == "openai":
         return OpenAICompatTransport(backend)
+    if backend.provider == "codex":
+        return CodexCliTransport(backend.model)
+    if backend.provider == "gemini":
+        return GeminiCliTransport(backend.model)
     return ClaudeCliTransport(backend.model)
 
 

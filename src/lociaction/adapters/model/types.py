@@ -14,14 +14,19 @@ ClientState = Literal["ready", "setupable", "unavailable"]
 
 @dataclass(frozen=True)
 class ModelClient:
-    """蒸留実行の transport パラメータ。provider は llm.DistillBackend の provider に対応。"""
+    """蒸留実行の transport パラメータ。provider は llm.DistillBackend の provider に対応。
+
+    model は codex-cli/gemini-cli では None を許容する — どちらの CLI も明示指定なしで
+    妥当なデフォルトモデルを使うため、ここで特定のモデル名をハードコードして陳腐化させない
+    （claude-cli/ollama-ft/openai-compat は明示モデルが必須で、呼び出し側が別途デフォルトを
+    補う）。
+    """
 
     id: str
-    provider: Literal["claude", "openai"]
-    model: str
+    provider: Literal["claude", "openai", "codex", "gemini"]
+    model: str | None
     base_url: str | None
     label: str
-
 
 @dataclass(frozen=True)
 class ClientStatus:

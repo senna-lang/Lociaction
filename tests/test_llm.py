@@ -16,6 +16,8 @@ from lociaction.llm import (
     DistillBackend,
     LLMValidationError,
     _call_claude_cli,
+    _call_codex_cli,
+    _call_gemini_cli,
     _call_openai,
     _strip_json_fence,
     _validate_palace,
@@ -626,6 +628,230 @@ def test_call_claude_cli_result_field_non_json_raises_runtime_error() -> None:
             with pytest.raises(RuntimeError, match="'result' field is not valid JSON"):
                 _call_claude_cli("prompt")
 
+
+
+# ---- _call_codex_cli ----
+
+
+def test_call_codex_cli_command_args() -> None:
+    """
+    subprocess.run をモックし、`codex exec` 実行時のコマンドリストに
+    exec, prompt, --sandbox read-only, --skip-git-repo-check, --output-schema,
+    -c model=<model> が含まれることを assert する
+    """
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            _call_codex_cli("test prompt", model="gpt-5-codex")
+
+            assert mock_run.called
+            cmd_list = mock_run.call_args[0][0]
+
+            assert cmd_list[0] == "/usr/bin/codex"
+            assert cmd_list[1] == "exec"
+            assert "test prompt" in cmd_list
+            assert "--sandbox" in cmd_list
+            assert "read-only" in cmd_list
+            assert "--skip-git-repo-check" in cmd_list
+            assert "--output-schema" in cmd_list
+            assert "-c" in cmd_list
+            assert "model=gpt-5-codex" in cmd_list
+
+
+def test_call_codex_cli_omits_model_override_when_none() -> None:
+    """model=None のとき -c model=... を付けず codex 自身の既定モデルに委ねる"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            _call_codex_cli("test prompt")
+            cmd_list = mock_run.call_args[0][0]
+            assert "-c" not in cmd_list
+
+
+def test_call_codex_cli_returns_dict() -> None:
+    """--output-schema 使用時、stdout はラップなしの生 JSON オブジェクトそのもの"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(MOCK_JSON_RESPONSE["structured_output"])
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            result = _call_codex_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_codex_cli_not_found_raises() -> None:
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="codex CLI not found"):
+            _call_codex_cli("prompt")
+
+
+def test_call_codex_cli_nonzero_exit_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = "boom"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            with pytest.raises(RuntimeError, match="codex exec failed"):
+                _call_codex_cli("prompt")
+
+
+def test_call_codex_cli_non_json_stdout_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "not json"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/codex"):
+            with pytest.raises(RuntimeError, match="non-JSON stdout"):
+                _call_codex_cli("prompt")
+
+
+# ---- _call_gemini_cli ----
+
+
+def test_call_gemini_cli_command_args() -> None:
+    """
+    subprocess.run をモックし、`gemini` 実行時のコマンドリストに
+    --prompt, prompt, --output-format json, --model が含まれることを assert する
+    """
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"response": json.dumps(MOCK_JSON_RESPONSE["structured_output"])}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            _call_gemini_cli("test prompt", model="gemini-2.5-pro")
+
+            cmd_list = mock_run.call_args[0][0]
+            assert cmd_list[0] == "/usr/bin/gemini"
+            assert "--prompt" in cmd_list
+            assert "test prompt" in cmd_list
+            assert "--output-format" in cmd_list
+            assert "json" in cmd_list
+            assert "--model" in cmd_list
+            assert "gemini-2.5-pro" in cmd_list
+
+
+def test_call_gemini_cli_omits_model_override_when_none() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"response": json.dumps(MOCK_JSON_RESPONSE["structured_output"])}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            _call_gemini_cli("test prompt")
+            cmd_list = mock_run.call_args[0][0]
+            assert "--model" not in cmd_list
+
+
+def test_call_gemini_cli_returns_dict() -> None:
+    """`response` フィールドの中身（文字列化された JSON）を取り出してパースする"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"response": json.dumps(MOCK_JSON_RESPONSE["structured_output"])}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            result = _call_gemini_cli("prompt")
+            assert result == MOCK_JSON_RESPONSE["structured_output"]
+
+
+def test_call_gemini_cli_not_found_raises() -> None:
+    with patch("shutil.which", return_value=None):
+        with pytest.raises(RuntimeError, match="gemini CLI not found"):
+            _call_gemini_cli("prompt")
+
+
+def test_call_gemini_cli_nonzero_exit_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = "boom"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            with pytest.raises(RuntimeError, match="gemini failed"):
+                _call_gemini_cli("prompt")
+
+
+def test_call_gemini_cli_error_field_raises_runtime_error() -> None:
+    """returncode=0 でも JSON に error フィールドがあれば失敗として扱う"""
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps(
+        {"error": {"type": "AuthError", "message": "not logged in"}}
+    )
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            with pytest.raises(RuntimeError, match="gemini returned an error"):
+                _call_gemini_cli("prompt")
+
+
+def test_call_gemini_cli_non_json_stdout_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "not json"
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            with pytest.raises(RuntimeError, match="non-JSON stdout"):
+                _call_gemini_cli("prompt")
+
+
+def test_call_gemini_cli_response_field_non_json_raises_runtime_error() -> None:
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = json.dumps({"response": "not json inside response field"})
+
+    with patch("lociaction.llm.subprocess.run", return_value=mock_result):
+        with patch("shutil.which", return_value="/usr/bin/gemini"):
+            with pytest.raises(
+                RuntimeError, match="'response' field is not valid JSON"
+            ):
+                _call_gemini_cli("prompt")
+
+
+# ---- _build_transport dispatch: codex / gemini ----
+
+
+def test_call_claude_dispatches_to_codex_backend() -> None:
+    backend = DistillBackend(provider="codex", model="gpt-5-codex", base_url=None)
+
+    with patch("lociaction.llm._call_codex_cli") as mock_call_codex_cli:
+        mock_call_codex_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
+        call_claude("prompt", backend=backend)
+
+        assert mock_call_codex_cli.called
+        call_args = mock_call_codex_cli.call_args
+        assert call_args[0][0] == "prompt"
+        assert call_args[0][1] == "gpt-5-codex"
+
+
+def test_call_claude_dispatches_to_gemini_backend() -> None:
+    backend = DistillBackend(provider="gemini", model=None, base_url=None)
+
+    with patch("lociaction.llm._call_gemini_cli") as mock_call_gemini_cli:
+        mock_call_gemini_cli.return_value = MOCK_JSON_RESPONSE["structured_output"]
+        call_claude("prompt", backend=backend)
+
+        assert mock_call_gemini_cli.called
+        call_args = mock_call_gemini_cli.call_args
+        assert call_args[0][0] == "prompt"
+        assert call_args[0][1] is None
 
 def test_call_openai_validation_retry_changes_request_body() -> None:
     """
