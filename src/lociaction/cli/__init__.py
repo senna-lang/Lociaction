@@ -99,7 +99,11 @@ def init(
         str | None,
         typer.Option(
             "--distill-client",
-            help="蒸留 client を明示指定する（ollama-ft | claude-cli）。Ready でなければエラー終了",
+            help=(
+                "蒸留 client を明示指定する（ollama-ft | claude-cli | codex-cli | "
+                "gemini-cli | grok-cli | opencode-cli | omp-cli）。"
+                "Ready でなければエラー終了"
+            ),
         ),
     ] = None,
 ) -> None:
@@ -193,10 +197,15 @@ def init(
                     "# distill client が未設定です。次のコマンドで選択してください:\n"
                     "#   loci distill --setup\n"
                     "#\n"
-                    '# client = "ollama-ft"     # ローカル FT モデル（Ollama）\n'
-                    '# client = "claude-cli"    # Claude CLI (claude --print)\n'
+                    '# client = "ollama-ft"       # ローカル FT モデル（Ollama）\n'
+                    '# client = "claude-cli"      # Claude CLI (claude --print)\n'
+                    '# client = "codex-cli"       # Codex CLI (codex exec)\n'
+                    '# client = "gemini-cli"      # Gemini CLI (gemini --prompt)\n'
+                    '# client = "grok-cli"        # Grok CLI (grok -p)\n'
+                    '# client = "opencode-cli"    # OpenCode (opencode run)\n'
+                    '# client = "omp-cli"         # Oh My Pi (omp -p)\n'
                     '# model = "..."\n'
-                    '# base_url = "..."         # ollama-ft / openai-compat のみ\n'
+                    '# base_url = "..."           # ollama-ft / openai-compat のみ\n'
                     "# batch_limit = 20\n"
                     "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
                     "\n"
@@ -466,6 +475,7 @@ def _resolve_init_distill_client(
     `--distill-client` 明示指定時は Ready でなければエラー終了する（別 client に落とさない）。
     """
     from lociaction.adapters.model.registry import (
+        DISCOVERABLE_CLIENT_IDS,
         check_ready,
         discover,
         ready_clients,
@@ -476,7 +486,7 @@ def _resolve_init_distill_client(
     from lociaction.config import load_config
 
     if distill_client_flag is not None:
-        if distill_client_flag not in ("ollama-ft", "claude-cli"):
+        if distill_client_flag not in DISCOVERABLE_CLIENT_IDS:
             typer.echo(f"Unknown distill client: {distill_client_flag}", err=True)
             raise typer.Exit(code=1)
         status = check_ready(distill_client_flag)

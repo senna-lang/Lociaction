@@ -1050,6 +1050,41 @@ def test_init_distill_client_flag_not_ready_errors_without_fallback(
     assert not (tmp_path / ".lociaction" / "memory.db").exists()
 
 
+def test_init_distill_client_flag_accepts_codex_cli(tmp_path, monkeypatch):
+    """回帰テスト: --distill-client の allowlist が ollama-ft/claude-cli に
+    ハードコードされていた頃は codex-cli/gemini-cli/grok-cli/opencode-cli/omp-cli
+    が誤って「Unknown distill client」で拒否されていた。DISCOVERABLE_CLIENT_IDS
+    を参照するようになったことを確認する。"""
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+
+    codex_client = ModelClient(
+        id="codex-cli",
+        provider="codex",
+        model=None,
+        base_url=None,
+        label="Codex CLI",
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="codex-cli",
+            label="Codex CLI",
+            state="ready",
+            reason="ready",
+            client=codex_client,
+        ),
+    )
+
+    result = runner.invoke(app, ["init", "--distill-client", "codex-cli"])
+    assert result.exit_code == 0
+
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
+    assert 'client = "codex-cli"' in config
+
+
 def test_init_distill_client_flag_unknown_id_errors(tmp_path, monkeypatch):
     """未知の --distill-client 値はエラー終了する"""
     monkeypatch.chdir(tmp_path)
