@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-14
+
 ### Added
 - `loci eval gate` (issue #37) is a CI regression gate for symbol-recall.
   It builds a tiny synthetic git+`code_edges` fixture (no network, no
@@ -109,6 +111,47 @@
   across threads (`SentenceTransformer` inference is not thread-safe). The
   embedder server now removes its PID file on idle-timeout/stop, not just the
   socket.
+
+### Security
+- `.lociaction/ignore` matching replaced regex-backtracking wildcard
+  evaluation with a linear-time DP matcher; the total normalized path
+  length is capped and fails **closed** (treated as excluded) rather than
+  open when exceeded. The `?` wildcard, previously compiled but silently
+  never matched, now matches a single character as documented.
+  `load_ignore()` opens the ignore file through a no-follow, non-blocking
+  directory-relative descriptor instead of check-then-open, closing a
+  symlink/FIFO TOCTOU. `IgnoreMatcher.matches()`/`matches_any()` memoize
+  results per normalized path with a bounded cache.
+- Harness session-log discovery (`resolve_claude_projects_path`,
+  `resolve_codex_sessions_path`, `resolve_omp_pi_sessions_path`,
+  `resolve_grok_sessions_path`) now walks candidate directories through a
+  helper that bounds total filesystem entries visited, not just matches
+  consumed, so a decoy-file-flooded harness directory can't make
+  discovery unbounded. `session_file_matches_project_root()` opens the
+  candidate session file through a no-follow, non-blocking
+  directory-relative descriptor (closing a stat-then-open TOCTOU and a
+  FIFO-blocking risk) and tolerates a `RecursionError`/`MemoryError` from
+  a maliciously deep-nested metadata line and a symlink-loop
+  `RuntimeError` from resolving a crafted `cwd`. `resolve_opencode_db_path()`
+  now rejects a symlinked or special-file (FIFO, etc.) database path
+  before it ever reaches SQLite.
+- `load_config()` enforces a file-size cap before parsing
+  `.lociaction/config.toml` and now catches `MemoryError`/`RecursionError`
+  alongside `TOMLDecodeError`, falling back to defaults like every other
+  malformed-config case instead of crashing. A tracked
+  `distill.batch_limit` above a fixed ceiling is rejected, so a cloned
+  repository's config can no longer expand automatic distillation to all
+  pending exchanges.
+- `write_client_config()` (the `loci init`/`loci distill --setup` config
+  writer) applies the same size and regular-file guards to the existing
+  config it preserves before rewriting `[distill]`/`[index]`.
+- Grok session parsing caps the number of distinct edit tool-call IDs
+  accepted per exchange and discards the whole exchange's touches, fail
+  closed, past the cap, bounding the ingestion work a single hostile
+  exchange can cause.
+- An unknown `--distill-client` value is sanitized before being echoed
+  to the terminal, matching every other untrusted-text error path in
+  `loci init`.
 
 ## [0.3.0] - 2026-06-12
 
