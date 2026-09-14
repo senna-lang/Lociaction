@@ -55,7 +55,9 @@ def _stub_distill_all(monkeypatch, calls: list):
 # ---- unconfigured ----
 
 
-def test_distill_unconfigured_non_tty_skips_without_error(tmp_path, monkeypatch) -> None:
+def test_distill_unconfigured_non_tty_skips_without_error(
+    tmp_path, monkeypatch
+) -> None:
     """unconfigured かつ非対話なら暗黙 client を作らず warn+exit0 する"""
     _init_project(tmp_path, monkeypatch)
     calls: list = []
@@ -125,16 +127,20 @@ def test_distill_configured_not_ready_non_tty_does_not_autoswitch(
 
     assert result.exit_code == 0
     assert "Not switching automatically" in result.output
+    assert "loci docs show distillation" in result.output
     assert calls == []
 
 
-def test_distill_configured_ready_uses_it_without_prompting(tmp_path, monkeypatch) -> None:
+def test_distill_configured_ready_uses_it_without_prompting(
+    tmp_path, monkeypatch
+) -> None:
     """configured client が Ready ならそのまま使い、discover/prompt は起きない"""
     lociaction_dir = _init_project(tmp_path, monkeypatch)
     _write_config(
         lociaction_dir,
         '[distill]\nclient = "claude-cli"\nmodel = "claude-haiku-4-5-20251001"\n',
     )
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
     calls: list = []
     _stub_distill_all(monkeypatch, calls)
     monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
@@ -156,6 +162,52 @@ def test_distill_configured_ready_uses_it_without_prompting(tmp_path, monkeypatc
     assert calls[0].provider == "claude"
 
 
+
+def test_distill_rejects_symlinked_lock_file(tmp_path, monkeypatch) -> None:
+    """distill.lock が symlink の場合、O_NOFOLLOW open で拒否して外部ファイルを
+    開かない (LOCI-DISTILL-LOCK-SYMLINK)。"""
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
+    _write_config(lociaction_dir, '[distill]\nclient = "claude-cli"\n')
+    outside = tmp_path / "outside.lock"
+    outside.write_text("must remain unchanged")
+    (lociaction_dir / "distill.lock").symlink_to(outside)
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 1
+    assert "symlinked lock file" in result.output
+    assert outside.read_text() == "must remain unchanged"
+
+
+
+def test_distill_error_progress_sanitizes_terminal_output(tmp_path, monkeypatch) -> None:
+    """distill_all の on_progress error callback は蒸留失敗テキストに含まれうる
+    端末制御シーケンスを出力へ残さない (LOCI-DISTILL-ERROR-ESCAPE-01)。"""
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
+    _write_config(lociaction_dir, '[distill]\nclient = "claude-cli"\n')
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="claude-cli",
+            label="Claude CLI",
+            state="ready",
+            reason="ready",
+            client=_CLAUDE_CLIENT,
+        ),
+    )
+
+    def _fake_distill_all(db, **kwargs):
+        kwargs["on_progress"](1, 1, "boom \x1b]8;;https://evil.test\x1b\\x")
+        return (0, 1)
+
+    monkeypatch.setattr("lociaction.distiller.distill_all", _fake_distill_all)
+
+    result = runner.invoke(app, ["distill"])
+
+    assert "\x1b" not in result.output
 # ---- --setup ----
 
 

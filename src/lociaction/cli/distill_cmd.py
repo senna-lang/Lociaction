@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from lociaction.adapters.model.types import ModelClient
+from lociaction.utils import sanitize_terminal_text
 
 
 def _is_interactive() -> bool:
@@ -63,12 +64,13 @@ def prompt_client_selection(root) -> ModelClient | None:
 def _setup_and_save(root) -> None:
     """`loci distill --setup`: 選んだ client を config.toml に書き込む"""
     from lociaction.adapters.model.registry import write_client_config
+    from lociaction.paths import lociaction_dir
 
     client = prompt_client_selection(root)
     if client is None:
         raise typer.Exit(1)
 
-    config_path = root / ".lociaction" / "config.toml"
+    config_path = lociaction_dir(root) / "config.toml"
     write_client_config(config_path, client)
     typer.echo(f"Saved distill.client = {client.id}")
 
@@ -91,10 +93,13 @@ def _resolve_backend(cfg, root, is_tty: bool):
         backend = DistillBackend.from_config(cfg)
     except DistillUnconfiguredError:
         if not is_tty:
+            from lociaction.cli.errors import DISTILLATION_DOCS
+
             typer.echo(
                 "Distill client is not configured. Run `loci distill --setup`.",
                 err=True,
             )
+            typer.echo(DISTILLATION_DOCS, err=True)
             return None
         typer.echo("Distill client is not configured.")
         client = prompt_client_selection(root)
@@ -106,12 +111,15 @@ def _resolve_backend(cfg, root, is_tty: bool):
         return backend
 
     if not is_tty:
+        from lociaction.cli.errors import DISTILLATION_DOCS
+
         typer.echo(
             f"Configured distill client '{cfg.distill_client}' is not ready "
             f"({status.reason}). Not switching automatically — run "
             "`loci distill --setup` or `loci distill` interactively.",
             err=True,
         )
+        typer.echo(DISTILLATION_DOCS, err=True)
         return None
 
     typer.echo(
@@ -124,17 +132,20 @@ def _resolve_backend(cfg, root, is_tty: bool):
 def distill(
     limit: Annotated[
         int | None,
-        typer.Option("--limit", "-n", help="処理する最大件数（省略時は全件）"),
+        typer.Option(
+            "--limit", "-n", help="Maximum exchanges to process (default: all)"
+        ),
     ] = None,
     setup: Annotated[
         bool,
         typer.Option(
             "--setup",
-            help="distill client を discover/setup/選択して config に保存する",
+            help="Discover, select, and save a distill client to config",
         ),
     ] = False,
 ) -> None:
-    """未蒸留の exchange を distill client で蒸留して palace_objects を生成する"""
+    """Distill undistilled exchanges into palace objects."""
+    import errno
     import fcntl
     import os
 
@@ -146,8 +157,9 @@ def distill(
     db = db_path(root)
 
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     if setup:
         _setup_and_save(root)
@@ -158,8 +170,24 @@ def distill(
 
     lock_path = db.parent / "distill.lock"
 
-    # ロック取得: fcntl.flock で排他ロック（LOCK_NB: 非ブロッキング）
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    # ロック取得: fcntl.flock で排他ロック（LOCK_NB: 非ブロッキング）。
+    # open_dir_relative（openat 相当）: .lociaction/ 配下は repo が書き込める
+    # 領域なので、distill.lock 自体の symlink（config.toml に既にある同種の
+    # ガード）だけでなく、親 `.lociaction/` を後から symlink にすり替える
+    # レースも構造的に閉じる (LOCI-REGISTRY-CONFIGDIR-TOCTOU-01)。
+    from lociaction.paths import open_dir_relative
+
+    try:
+        fd = open_dir_relative(
+            lock_path.parent, lock_path.name, os.O_CREAT | os.O_RDWR, 0o600
+        )
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            typer.echo(
+                f"Refusing symlinked lock file: {lock_path}", err=True
+            )
+            raise typer.Exit(1) from None
+        raise
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -175,7 +203,9 @@ def distill(
 
     def _on_progress(cur: int, tot: int, error: str | None = None) -> None:
         if error:
-            typer.echo(f"  [{cur}/{tot}] error: {error}", err=True)
+            typer.echo(
+                f"  [{cur}/{tot}] error: {sanitize_terminal_text(error)}", err=True
+            )
         else:
             typer.echo(f"  [{cur}/{tot}] distilled", err=True)
 

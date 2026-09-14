@@ -9,16 +9,16 @@ import typer
 
 
 def status(
-    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON output")] = False,
     check: Annotated[
         bool,
         typer.Option(
             "--check",
-            help="設定済み distill client の readiness を確認する（サービスへ接続する場合がある）",
+            help="Check configured distill-client readiness (may contact a service)",
         ),
     ] = False,
 ) -> None:
-    """インデックス状態を表示し、--check 指定時だけ distill client の readiness を確認する"""
+    """Show index status; with --check, also probe distill-client readiness."""
     from lociaction.adapters.model.registry import check_ready
     from lociaction.config import load_config
     from lociaction.db import check_drift, get_connection, get_last_distill_error
@@ -29,8 +29,9 @@ def status(
     db = db_path(root)
 
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     con = get_connection(db)
     try:
@@ -118,4 +119,3 @@ def status(
             )
         if cfg.config_error:
             typer.echo(f"Config    : ⚠ parse error — {cfg.config_error}")
-

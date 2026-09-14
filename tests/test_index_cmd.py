@@ -154,6 +154,48 @@ def test_index_ingests_codex_rollout(tmp_path: Path, monkeypatch) -> None:
     assert con.execute("SELECT COUNT(*) FROM file_renames").fetchone()[0] == 1
     con.close()
 
+
+def test_index_verbose_sanitizes_crafted_session_filename(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--verbose は session log のファイル名を制御シーケンス除去なしで echo していた
+    (LOCI-CLI-002)。crafted filename が terminal escape を持ち込まないことを確認する。"""
+    monkeypatch.chdir(tmp_path)
+    init_db(tmp_path / ".lociaction" / "memory.db")
+
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    evil_name = "session-\x1b[31mpwned.jsonl"
+    entries = [
+        {
+            "type": "user",
+            "uuid": "u1",
+            "parentUuid": None,
+            "isMeta": False,
+            "cwd": str(tmp_path),
+            "message": {"role": "user", "content": "評価用の質問文です。" * 10},
+        },
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": "u1",
+            "message": {"role": "assistant", "content": "評価用の回答文です。" * 10},
+        },
+    ]
+    (session_dir / evil_name).write_text(
+        "\n".join(json.dumps(e, ensure_ascii=False) for e in entries) + "\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["index", "--harness", "claude", "--path", str(session_dir), "--verbose"],
+    )
+
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "pwned" in result.output
+
+
 def test_index_codex_excludes_foreign_project_rollout(
     tmp_path: Path, monkeypatch
 ) -> None:

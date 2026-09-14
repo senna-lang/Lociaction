@@ -7,16 +7,21 @@ from typing import Annotated, Any
 
 import typer
 
+from lociaction.utils import sanitize_terminal_text
+
 
 def show(
     exchange_id: Annotated[str, typer.Argument(help="exchange id from search/context")],
-    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON output")] = False,
 ) -> None:
-    """exchange id から保存済みの原文を取得する。
+    """Retrieve the stored verbatim exchange for an id.
 
-    前後を辿れるよう、同一会話内の ply 隣接（`context`、`loci context` と同じ additive
-    レーン）も併せて返す——新しいフラグは増やさず、既存出力に乗せるだけ。これを起点に
-    `context` 内の `exchange_id` で `loci show` を繰り返せば、任意の深さまで辿れる。
+    Also returns ply-adjacent neighbors in `context` (same additive lane as
+    `loci context`). Chain `loci show` on those exchange ids to walk further.
+
+    Session transcripts may contain credentials, private source code, paths, or
+    personal data. Do not paste this output into chat, issues, commits, or logs
+    without reviewing and redacting it.
     """
     from lociaction.context_lookup import ply_adjacent_context
     from lociaction.db import get_connection
@@ -25,8 +30,9 @@ def show(
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     con = get_connection(db)
     row = con.execute(
@@ -45,7 +51,9 @@ def show(
         typer.echo(f"Exchange not found: {exchange_id}", err=True)
         raise typer.Exit(1)
 
-    context = ply_adjacent_context(con, row["conversation_id"], row["id"], row["source_path"])
+    context = ply_adjacent_context(
+        con, row["conversation_id"], row["id"], row["source_path"]
+    )
     con.close()
 
     if json_output:
@@ -77,31 +85,43 @@ def show(
         )
     else:
         typer.echo(f"[User] (ply {row['ply_start']}-{row['ply_end']})")
-        typer.echo(row["user_content"])
+        typer.echo(sanitize_terminal_text(row["user_content"]))
         typer.echo("\n[Agent]")
-        typer.echo(row["agent_content"])
+        typer.echo(sanitize_terminal_text(row["agent_content"]))
         for s in context:
             label = "前" if s.ply < row["ply_start"] else "後"
-            typer.echo(f"\n[{label}: {s.exchange_id}] {s.exchange_core or s.user_content[:80]}")
+            preview = s.exchange_core or (s.user_content or "")[:80]
+            typer.echo(
+                f"\n[{label}: {s.exchange_id}] {sanitize_terminal_text(preview)}"
+            )
 
 
 def dump(
     distilled: Annotated[
-        bool, typer.Option("--distilled", help="蒸留済み palace objects を出力（互換オプション）")
+        bool,
+        typer.Option(
+            "--distilled",
+            help="Emit distilled palace objects (compatibility flag; this is the only mode)",
+        ),
     ] = False,
-    limit: Annotated[int, typer.Option("--limit", "-n", help="最大件数")] = 1000,
-    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum results")] = 1000,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON output")] = False,
 ) -> None:
-    """蒸留済み palace objects を新しい順に出力する（唯一の出力モード）"""
+    """Dump distilled palace objects, newest first.
+
+    Session transcripts may contain credentials, private source code, paths, or
+    personal data. Do not paste this output into chat, issues, commits, or logs
+    without reviewing and redacting it.
+    """
     from lociaction.db import get_connection
     from lociaction.paths import db_path, find_project_root
-
 
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     con = get_connection(db)
     try:
@@ -161,8 +181,8 @@ def dump(
     else:
         for r in rows:
             date = (r["distilled_at"] or "")[:10]
-            typer.echo(f"\n[{date}] {r['exchange_core']}")
+            typer.echo(f"\n[{date}] {sanitize_terminal_text(r['exchange_core'])}")
             if r["specific_context"]:
-                typer.echo(f"  {r['specific_context']}")
+                typer.echo(f"  {sanitize_terminal_text(r['specific_context'])}")
             for rm in rooms_map.get(r["id"], [])[:2]:
-                typer.echo(f"  #{rm['room_key']}")
+                typer.echo(f"  #{sanitize_terminal_text(rm['room_key'])}")

@@ -55,18 +55,23 @@ def is_external_path(path: str) -> bool:
 
 
 def normalize_repo_path(file_path: str, project_root: str) -> str | None:
-    """絶対パスをプロジェクトルートからの相対パスへ正規化する（design §5.3）。
+    """プロジェクト内のパスを実体ベースの相対パスへ正規化する（design §5.3）。
 
-    プロジェクト外・外部ライブラリ・相対パス入力は None を返す（不変条件3）。
-    ログと実行時のプロジェクトルートが別の symlink 経路を使っていても、
-    実体のパスで比較する。文字列の前方一致では隣接リポジトリ（例: repo と
+    相対パスは project_root を基準に解決し、absolute/relative を問わず symlink を
+    解決してから root の配下かを判定する。プロジェクト外・外部ライブラリ・root 自体は
+    None を返す（不変条件3）。文字列の前方一致では隣接リポジトリ（例: repo と
     repo-other）を誤って内部と判定してしまうため、パス部品ごとに比較する。
     """
-    if not file_path.startswith("/"):
+    try:
+        root_parts = PurePosixPath(os.path.realpath(project_root)).parts
+        path_to_resolve = (
+            file_path
+            if os.path.isabs(file_path)
+            else os.path.join(project_root, file_path)
+        )
+        file_parts = PurePosixPath(os.path.realpath(path_to_resolve)).parts
+    except (OSError, ValueError):
         return None
-
-    file_parts = PurePosixPath(os.path.realpath(file_path)).parts
-    root_parts = PurePosixPath(os.path.realpath(project_root)).parts
 
     if file_parts[: len(root_parts)] != root_parts:
         return None
@@ -83,15 +88,14 @@ def normalize_repo_path(file_path: str, project_root: str) -> str | None:
 
 
 def normalize_touched_paths(paths: Iterable[str], project_root: str) -> list[str]:
-    """`exchange.files` の各パスをプロジェクトルート相対へ揃える（issue #36の ignore 判定用）。
+    """`exchange.files` の全パスを project_root 相対の安全な形へ揃える。
 
-    ハーネスによって絶対パス（例: opencode の filePath）と相対パス（例: claude の
-    tool_use.input.file_path）が混在するため、絶対パスだけ `normalize_repo_path` へ
-    通して相対化し、プロジェクト外・外部ライブラリのパスは結果から除く。
+    ハーネスごとに混在する absolute/relative の入力を同じ containment boundary に
+    通し、プロジェクト外・外部ライブラリのパスは結果から除く。
     """
     normalized: list[str] = []
     for path in paths:
-        rel_path = normalize_repo_path(path, project_root) if path.startswith("/") else path
+        rel_path = normalize_repo_path(path, project_root)
         if rel_path is not None:
             normalized.append(rel_path)
     return normalized

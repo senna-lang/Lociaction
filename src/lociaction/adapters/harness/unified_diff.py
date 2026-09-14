@@ -11,6 +11,7 @@ _HUNK_HEADER_RE = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_lines>\d+))? "
     r"\+(?P<new_start>\d+)(?:,(?P<new_lines>\d+))? @@(?: .*)?$"
 )
+_MAX_HUNK_COORDINATE_DIGITS = 9
 
 
 @dataclass(frozen=True)
@@ -33,14 +34,27 @@ def parse_unified_diff(diff: str) -> ParsedUnifiedDiff | None:
     for line in diff.splitlines():
         header = _HUNK_HEADER_RE.match(line)
         if header is not None:
-            old_remaining = int(header["old_lines"] or 1)
-            new_remaining = int(header["new_lines"] or 1)
+            parsed_old_remaining = _hunk_int(header["old_lines"], default=1)
+            parsed_new_remaining = _hunk_int(header["new_lines"], default=1)
+            parsed_old_start = _hunk_int(header["old_start"])
+            parsed_new_start = _hunk_int(header["new_start"])
+            if (
+                parsed_old_remaining is None
+                or parsed_new_remaining is None
+                or parsed_old_start is None
+                or parsed_new_start is None
+            ):
+                old_remaining = 0
+                new_remaining = 0
+                continue
+            old_remaining = parsed_old_remaining
+            new_remaining = parsed_new_remaining
             line_ranges.append(
                 LineRange(
-                    old_start=int(header["old_start"]),
-                    old_lines=old_remaining,
-                    new_start=int(header["new_start"]),
-                    new_lines=new_remaining,
+                    old_start=parsed_old_start,
+                    old_lines=parsed_old_remaining,
+                    new_start=parsed_new_start,
+                    new_lines=parsed_new_remaining,
                 )
             )
             continue
@@ -62,3 +76,15 @@ def parse_unified_diff(diff: str) -> ParsedUnifiedDiff | None:
     if not line_ranges:
         return None
     return ParsedUnifiedDiff(tuple(line_ranges), added, removed)
+
+
+def _hunk_int(raw: str | None, default: int | None = None) -> int | None:
+    """hunk 座標を安全な整数へ変換する。過長・非数値は None。"""
+    if raw is None:
+        return default
+    if len(raw) > _MAX_HUNK_COORDINATE_DIGITS:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None

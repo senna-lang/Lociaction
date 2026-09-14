@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
 import typer
 
 from lociaction.cli.distill_cmd import distill
+from lociaction.cli.docs_cmd import docs_app
 from lociaction.cli.eval_cmd import eval_app
 from lociaction.cli.gc_cmd import gc
 from lociaction.cli.hook_cmd import hook_app
@@ -23,8 +26,18 @@ from lociaction.cli.search_cmd import context, search
 from lociaction.cli.server_cmd import server_app
 from lociaction.cli.show_cmd import dump, show
 from lociaction.cli.status_cmd import status
+from lociaction.utils import sanitize_terminal_text
 
-app = typer.Typer(help="CLI-first memory layer for AI coding agents")
+_HELP_EPILOG = (
+    "Coding agent? Run `loci docs list` to discover version-matched documentation. "
+    "Use `loci docs show troubleshooting` when diagnosing an error."
+)
+
+app = typer.Typer(
+    help="CLI-first memory layer for AI coding agents",
+    epilog=_HELP_EPILOG,
+    no_args_is_help=True,
+)
 
 DEFAULT_DISTILL_RECENT = 50
 
@@ -65,34 +78,120 @@ def _cleanup_partial_lociaction_dir(lociaction_dir: Path, dir_preexisted: bool) 
         shutil.rmtree(lociaction_dir, ignore_errors=True)
 
 
+def _ensure_lociaction_ignored(root: Path) -> None:
+    """`.lociaction/` を root の .gitignore に、実効的に無視される状態で追加する。
+
+    既存ファイルの改行形式と末尾改行の有無を保つため、内容を正規化せず追記する。
+
+    symlink チェックと書き込みを1つの os.open(O_NOFOLLOW) 呼び出しへまとめる。
+    別々の is_symlink() チェックと write_text()/open("a") では、その間に symlink を
+    仕込まれる TOCTOU window が生まれる（LOCI-GITIGNORE-TOCTOU）。
+    """
+    from lociaction.ignore import MAX_IGNORE_FILE_BYTES, parse_ignore_rules
+
+    gitignore_path = root / ".gitignore"
+    try:
+        fd = os.open(
+            str(gitignore_path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644
+        )
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(
+                f"refusing symlinked .gitignore: {gitignore_path}"
+            ) from exc
+        raise
+
+    with os.fdopen(fd, "r+", encoding="utf-8", newline="") as gitignore:
+        # 攻撃者制御の既存 .gitignore を無制限に全文読み込まない
+        # (LOCI-GITIGNORE-UNBOUNDED-READ)。上限を超える場合は既存ルールを
+        # 検証しようとせず、末尾に無条件で自分のルールを追記する
+        # （末尾に付けた否定なしパターンは last-match-wins で必ず勝つため、
+        # 全文を読めなくても安全に正しい状態へ収束する）。
+        content = gitignore.read(MAX_IGNORE_FILE_BYTES + 1)
+        if len(content) > MAX_IGNORE_FILE_BYTES:
+            gitignore.seek(0, os.SEEK_END)
+            gitignore.write("\n.lociaction/\n")
+            return
+
+        # 実際の gitignore の優先順位規則（最後に一致した行が勝つ・否定行）で
+        # 実効的に無視されているかを判定する。単純な文字列一致では、攻撃者が
+        # `.lociaction/` の直後に `!.lociaction/` を仕込んで無効化できてしまう
+        # (LOCI-GITIGNORE-NEGATION-BYPASS)。
+        if parse_ignore_rules(content).matches(".lociaction/memory.db"):
+            return
+
+        if not content:
+            suffix = ".lociaction/\n"
+        elif content.endswith("\r\n"):
+            suffix = ".lociaction/\r\n"
+        elif content.endswith("\n"):
+            suffix = ".lociaction/\n"
+        elif content.endswith("\r"):
+            suffix = ".lociaction/\r"
+        elif "\r\n" in content:
+            suffix = "\r\n.lociaction/"
+        elif "\n" in content:
+            suffix = "\n.lociaction/"
+        elif "\r" in content:
+            suffix = "\r.lociaction/"
+        else:
+            suffix = "\n.lociaction/"
+
+        gitignore.write(suffix)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from lociaction import __version__
+
+        typer.echo(f"lociaction {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit",
+        ),
+    ] = False,
+) -> None:
+    """CLI-first memory layer for AI coding agents."""
+
+
 @app.command()
 def init(
     skip_existing: Annotated[
         bool,
-        typer.Option("--skip-existing", help="既存 exchange の蒸留をスキップする"),
+        typer.Option("--skip-existing", help="Skip distillation of existing exchanges"),
     ] = False,
     distill_limit: Annotated[
         int | None,
         typer.Option(
-            "--distill-limit", help="既存 exchange のうち直近 N 件のみ蒸留対象にする"
+            "--distill-limit",
+            help="Distill only the most recent N existing exchanges",
         ),
     ] = None,
     min_chars: Annotated[
         int | None,
         typer.Option(
             "--min-chars",
-            help="既存 exchange の最小文字数フィルタ（省略時は対話で選択）",
+            help="Index-time minimum character filter (prompted if omitted)",
         ),
     ] = None,
     no_hooks: Annotated[
         bool,
-        typer.Option("--no-hooks", help="Claude Code の hook 自動登録をスキップ"),
+        typer.Option("--no-hooks", help="Skip automatic Claude Code hook registration"),
     ] = False,
     no_local_distiller: Annotated[
         bool,
         typer.Option(
             "--no-local-distiller",
-            help="ローカル蒸留モデルの pull 提案をスキップする",
+            help="Skip the offer to pull the local distillation model",
         ),
     ] = False,
     distill_client: Annotated[
@@ -100,20 +199,22 @@ def init(
         typer.Option(
             "--distill-client",
             help=(
-                "蒸留 client を明示指定する（ollama-ft | claude-cli | codex-cli | "
-                "gemini-cli | grok-cli | opencode-cli | omp-cli）。"
-                "Ready でなければエラー終了"
+                "Select a distill client non-interactively (ollama-ft | claude-cli | "
+                "codex-cli | gemini-cli | grok-cli | opencode-cli | omp-cli). "
+                "Exits with an error if that client is not ready"
             ),
         ),
     ] = None,
 ) -> None:
-    """プロジェクトルートに .lociaction/memory.db を初期化する"""
+    """Initialize `.lociaction/memory.db` in the project root."""
     from lociaction.db import get_connection, init_db
     from lociaction.indexer import index_file, parse_exchanges
     from lociaction.paths import (
         db_path,
         find_project_root,
+        open_dir_relative,
         resolve_claude_projects_path,
+        session_files_for_project,
     )
 
     _print_banner()
@@ -127,7 +228,7 @@ def init(
 
     # 既存セッションの検出
     target_dir = resolve_claude_projects_path(root)
-    jsonl_files = list(target_dir.rglob("*.jsonl")) if target_dir else []
+    jsonl_files = session_files_for_project(target_dir, root) if target_dir else []
 
     # --- 対話フェーズ（DB 作成前にすべての質問を完了する） ---
     resolved_min_chars = 50
@@ -173,45 +274,101 @@ def init(
     lociaction_dir = db.parent
     dir_preexisted = lociaction_dir.exists()
     try:
+        _ensure_lociaction_ignored(root)
         init_db(db)
 
         config_path = lociaction_dir / "config.toml"
-        if not config_path.exists():
+        # Path.exists() はダングリング symlink を「存在しない」と報告するため、
+        # そのまま分岐に使うと write_text() が symlink をたどって外部ファイルへ
+        # 書き込んでしまう (LOCI-INIT-CONFIGTOML-SYMLINK-TOCTOU)。O_NOFOLLOW で
+        # 存在確認そのものを行い、symlink なら中身の有無に関わらず即座に拒否する。
+        # open_dir_relative は親 `.lociaction/` 自体の symlink すり替えにも
+        # 都度対応する (LOCI-REGISTRY-CONFIGDIR-TOCTOU-01)。
+        try:
+            probe_fd = open_dir_relative(config_path.parent, config_path.name, os.O_RDONLY)
+        except FileNotFoundError:
+            config_exists = False
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError(
+                    f"refusing symlinked config file: {config_path}"
+                ) from exc
+            raise
+        else:
+            os.close(probe_fd)
+            config_exists = True
+
+        if not config_exists:
             if chosen_client is not None:
                 from lociaction.adapters.model.registry import write_client_config
 
                 write_client_config(config_path, chosen_client)
                 # write_client_config は既定で [distill]/[index] のみ生成する。
                 # init 由来のコメント（batch_limit/min_chars 案内）を後段に追記する。
-                config_path.write_text(
-                    config_path.read_text().rstrip("\n")
-                    + "\n"
-                    + "# batch_limit = 20\n"
-                    + "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
-                )
+                # write_client_config は O_NOFOLLOW で作成済みだが、ここで別の
+                # read_text()/write_text() で開き直すとその間に symlink を
+                # 仕込まれる TOCTOU window が生まれるため、単一の
+                # os.open(O_NOFOLLOW) セッションで読み書きする。
+                try:
+                    append_fd = open_dir_relative(
+                        config_path.parent, config_path.name, os.O_RDWR
+                    )
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ValueError(
+                            f"refusing symlinked config file: {config_path}"
+                        ) from exc
+                    raise
+                with os.fdopen(append_fd, "r+") as f:
+                    content = f.read()
+                    f.seek(0)
+                    f.truncate()
+                    f.write(
+                        content.rstrip("\n")
+                        + "\n"
+                        + "# batch_limit = 20\n"
+                        + "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
+                    )
             else:
-                config_path.write_text(
-                    "# Lociaction configuration\n"
-                    "\n"
-                    "[distill]\n"
-                    "# distill client が未設定です。次のコマンドで選択してください:\n"
-                    "#   loci distill --setup\n"
-                    "#\n"
-                    '# client = "ollama-ft"       # ローカル FT モデル（Ollama）\n'
-                    '# client = "claude-cli"      # Claude CLI (claude --print)\n'
-                    '# client = "codex-cli"       # Codex CLI (codex exec)\n'
-                    '# client = "gemini-cli"      # Gemini CLI (gemini --prompt)\n'
-                    '# client = "grok-cli"        # Grok CLI (grok -p)\n'
-                    '# client = "opencode-cli"    # OpenCode (opencode run)\n'
-                    '# client = "omp-cli"         # Oh My Pi (omp -p)\n'
-                    '# model = "..."\n'
-                    '# base_url = "..."           # ollama-ft / openai-compat のみ\n'
-                    "# batch_limit = 20\n"
-                    "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
-                    "\n"
-                    "[index]\n"
-                    "# min_chars = 50   # trivial フィルタ閾値（文字数）\n"
-                )
+                try:
+                    create_fd = open_dir_relative(
+                        config_path.parent,
+                        config_path.name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o644,
+                    )
+                except FileExistsError:
+                    pass  # probe 以降に別プロセスが作成済み: 既存 config を尊重する
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ValueError(
+                            f"refusing symlinked config file: {config_path}"
+                        ) from exc
+                    raise
+                else:
+                    with os.fdopen(create_fd, "w") as f:
+                        f.write(
+                            "# Lociaction configuration\n"
+                            "\n"
+                            "[distill]\n"
+                            "# distill client が未設定です。次のコマンドで選択してください:\n"
+                            "#   loci distill --setup\n"
+                            "#\n"
+                            '# client = "ollama-ft"       # ローカル FT モデル（Ollama）\n'
+                            '# client = "claude-cli"      # Claude CLI (claude --print)\n'
+                            '# client = "codex-cli"       # Codex CLI (codex exec)\n'
+                            '# client = "gemini-cli"      # Gemini CLI (gemini --prompt)\n'
+                            '# client = "grok-cli"        # Grok CLI (grok -p)\n'
+                            '# client = "opencode-cli"    # OpenCode (opencode run)\n'
+                            '# client = "omp-cli"         # Oh My Pi (omp -p)\n'
+                            '# model = "..."\n'
+                            '# base_url = "..."           # loopback only; remote needs LOCIACTION_REMOTE_DISTILL_ORIGINS\n'
+                            "# batch_limit = 20\n"
+                            "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
+                            "\n"
+                            "[index]\n"
+                            "# min_chars = 50   # trivial フィルタ閾値（文字数）\n"
+                        )
 
         typer.echo(f"Initialized: {db}")
     except KeyboardInterrupt:
@@ -219,7 +376,7 @@ def init(
         _cleanup_partial_lociaction_dir(lociaction_dir, dir_preexisted)
         raise typer.Exit(code=130) from None
     except Exception as exc:  # noqa: BLE001
-        typer.echo(f"\n⚠ init failed: {exc}", err=True)
+        typer.echo(f"\n⚠ init failed: {sanitize_terminal_text(str(exc))}", err=True)
         typer.echo("Cleaning up partial state...", err=True)
         _cleanup_partial_lociaction_dir(lociaction_dir, dir_preexisted)
         raise typer.Exit(code=1) from None
@@ -240,7 +397,7 @@ def init(
         raise typer.Exit(code=130) from None
     except Exception as exc:  # noqa: BLE001
         typer.echo(
-            f"\n⚠ AGENTS.md update failed: {exc}\n"
+            f"\n⚠ AGENTS.md update failed: {sanitize_terminal_text(str(exc))}\n"
             "The database was created successfully — fix AGENTS.md manually.",
             err=True,
         )
@@ -262,9 +419,14 @@ def init(
                         db,
                         min_chars=resolved_min_chars,
                         preparsed_exchanges=filtered,
+                        project_root=root,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    typer.echo(f"  ⚠ skip {jsonl.name}: {exc}", err=True)
+                    typer.echo(
+                        f"  ⚠ skip {sanitize_terminal_text(jsonl.name)}: "
+                        f"{sanitize_terminal_text(str(exc))}",
+                        err=True,
+                    )
 
             typer.echo(f"Indexed {actual_total} existing exchange(s).")
 
@@ -304,7 +466,7 @@ def init(
         _cleanup_partial_lociaction_dir(lociaction_dir, dir_preexisted)
         raise typer.Exit(code=130) from None
     except Exception as exc:  # noqa: BLE001
-        typer.echo(f"\n⚠ init failed: {exc}", err=True)
+        typer.echo(f"\n⚠ init failed: {sanitize_terminal_text(str(exc))}", err=True)
         typer.echo("Cleaning up partial state...", err=True)
         _cleanup_partial_lociaction_dir(lociaction_dir, dir_preexisted)
         raise typer.Exit(code=1) from None
@@ -320,7 +482,8 @@ def init(
             typer.echo(message)
         except Exception as exc:  # noqa: BLE001
             typer.echo(
-                f"\n⚠ Hook install failed: {exc}\nRetry later with: loci hook install",
+                f"\n⚠ Hook install failed: {sanitize_terminal_text(str(exc))}\n"
+                "Retry later with: loci hook install",
                 err=True,
             )
 
@@ -339,13 +502,25 @@ def init(
 
             def _on_progress(cur: int, tot: int, error: str | None = None) -> None:
                 if error:
-                    typer.echo(f"  [{cur}/{tot}] error: {error}", err=True)
+                    typer.echo(
+                        f"  [{cur}/{tot}] error: {sanitize_terminal_text(error)}",
+                        err=True,
+                    )
                 else:
                     typer.echo(f"  [{cur}/{tot}] distilled", err=True)
 
+            backend = (
+                DistillBackend(
+                    provider=chosen_client.provider,
+                    model=chosen_client.model,
+                    base_url=chosen_client.base_url,
+                )
+                if chosen_client is not None
+                else DistillBackend.from_config(cfg)
+            )
             count, err_count = distill_all(
                 db,
-                backend=DistillBackend.from_config(cfg),
+                backend=backend,
                 on_progress=_on_progress,
                 project_root=str(root),
                 distill_min_chars=cfg.distill_min_chars,
@@ -363,14 +538,17 @@ def init(
             )
             raise typer.Exit(code=130) from None
         except DistillUnconfiguredError:
+            from lociaction.cli.errors import DISTILLATION_DOCS
+
             typer.echo(
                 "\nDistill client is not configured — skipping distillation.\n"
-                "Configure and retry with: loci distill --setup",
+                "Configure and retry with: loci distill --setup\n"
+                f"{DISTILLATION_DOCS}",
                 err=True,
             )
         except EmbedderSetupError as exc:
             typer.echo(
-                f"\n⚠ {exc}\n"
+                f"\n⚠ {sanitize_terminal_text(str(exc))}\n"
                 "Indexed exchanges remain — retry with: loci distill "
                 "after fixing the environment.",
                 err=True,
@@ -378,7 +556,7 @@ def init(
             raise typer.Exit(code=1) from None
         except Exception as exc:  # noqa: BLE001
             typer.echo(
-                f"\n⚠ Distillation failed: {exc}\n"
+                f"\n⚠ Distillation failed: {sanitize_terminal_text(str(exc))}\n"
                 "Indexed exchanges remain — retry with: loci distill",
                 err=True,
             )
@@ -488,7 +666,11 @@ def _resolve_init_distill_client(
 
     if distill_client_flag is not None:
         if distill_client_flag not in DISCOVERABLE_CLIENT_IDS:
-            typer.echo(f"Unknown distill client: {distill_client_flag}", err=True)
+            typer.echo(
+                "Unknown distill client: "
+                f"{sanitize_terminal_text(distill_client_flag)}",
+                err=True,
+            )
             raise typer.Exit(code=1)
         status = check_ready(distill_client_flag)
         if status.state != "ready" or status.client is None:
@@ -596,6 +778,7 @@ app.command()(status)
 app.command()(show)
 app.command()(dump)
 app.command()(prime)
+app.add_typer(docs_app, name="docs")
 app.add_typer(hook_app, name="hook")
 app.add_typer(server_app, name="server")
 app.add_typer(eval_app, name="eval")

@@ -4,18 +4,33 @@ Supports distill_provider (claude/openai) and distill_base_url for provider swit
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+from lociaction.paths import lociaction_dir
+from lociaction.utils import sanitize_terminal_text
 
 CONFIG_FILENAME = "config.toml"
+# 攻撃者制御の config.toml（クローンした repo が出荷しうる）を無制限にメモリへ
+# 読み込んでパースしないための上限（LOCI-CONFIG-TOML-MEMORYERROR-DOS）。
+# 正当な config.toml は通常数百 byte 程度に収まる。
+MAX_CONFIG_FILE_BYTES = 256 * 1024
 
 # ---- デフォルト値 ----
 
 DEFAULT_DISTILL_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_DISTILL_BATCH_LIMIT = 20
+
+# tracked config が SessionStart hook を通じて自動 distill を実行する exchange 数の
+# 上限。明示的な user-scoped override がない限り clone はこの budget を超えられない。
+# (LOCI-CONFIG-UNBOUNDED-BATCH-01)
+MAX_DISTILL_BATCH_LIMIT = 100
 DEFAULT_INDEX_MIN_CHARS = 50
 DEFAULT_DISTILL_MIN_CHARS = 100
 DEFAULT_DISTILL_PROVIDER = "claude"
@@ -37,6 +52,24 @@ VALID_DISTILL_CLIENT_IDS = frozenset(
 # GGUF は Ollama 経由で hf.co/<repo>:<quant> の形式で直接 pull できる。
 LOCAL_DISTILL_MODEL = "hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M"
 LOCAL_DISTILL_BASE_URL = "http://localhost:11434/v1"
+
+# project-local config.toml だけでは蒸留内容の送信先をリモートへ変更できない。
+# リモート OpenAI 互換 endpoint は、呼び出すユーザーが environment で origin を許可する。
+REMOTE_DISTILL_ORIGINS_ENV = "LOCIACTION_REMOTE_DISTILL_ORIGINS"
+# CLI backends transmit distillation input to their configured provider. A repository
+# config may select them only after the invoking user's environment names the client.
+REMOTE_DISTILL_CLIENTS_ENV = "LOCIACTION_REMOTE_DISTILL_CLIENTS"
+REMOTE_CLI_DISTILL_CLIENT_IDS = frozenset(
+    {
+        "claude-cli",
+        "codex-cli",
+        "gemini-cli",
+        "grok-cli",
+        "opencode-cli",
+        "omp-cli",
+    }
+)
+
 
 
 @dataclass
@@ -63,19 +96,59 @@ def load_config(project_root: Path) -> Config:
     """project_root/.lociaction/config.toml を読んで Config を返す。
     ファイルがなければデフォルト。不正な値は警告してデフォルトにフォールバック。
     """
-    config_path = project_root / ".lociaction" / CONFIG_FILENAME
+    config_path = lociaction_dir(project_root) / CONFIG_FILENAME
     if not config_path.exists():
         return Config()
+
+    if config_path.is_symlink() or not config_path.is_file():
+        error_message = f"refusing non-regular config file: {config_path}"
+        print(f"Warning: {error_message}", file=sys.stderr)
+        return Config(config_error=error_message)
+
+    try:
+        if config_path.stat().st_size > MAX_CONFIG_FILE_BYTES:
+            # 攻撃者制御の config.toml（クローンした repo が出荷しうる）は
+            # サイズ上限を設けず tomllib.load() すると、ファイルサイズに
+            # 比例したメモリを確保して MemoryError で無条件クラッシュしうる
+            # (LOCI-CONFIG-TOML-MEMORYERROR-DOS)。他の壊れた config と同じく
+            # デフォルトへフォールバックする。
+            error_message = (
+                f"failed to parse {config_path}: file exceeds "
+                f"{MAX_CONFIG_FILE_BYTES} bytes"
+            )
+            print(f"Warning: {error_message}", file=sys.stderr)
+            return Config(config_error=error_message)
+    except OSError as e:
+        error_message = sanitize_terminal_text(f"failed to parse {config_path}: {e}")
+        print(f"Warning: {error_message}", file=sys.stderr)
+        return Config(config_error=error_message)
 
     try:
         with config_path.open("rb") as f:
             data = tomllib.load(f)
     except (FileNotFoundError, tomllib.TOMLDecodeError, OSError) as e:
-        error_message = f"failed to parse {config_path}: {e}"
+        error_message = sanitize_terminal_text(f"failed to parse {config_path}: {e}")
+        print(f"Warning: {error_message}", file=sys.stderr)
+        return Config(config_error=error_message)
+    except (RecursionError, MemoryError):
+        # tomllib は再帰下降パーサで、深くネストした配列/inline table に
+        # 明示的な深さ上限を持たない。攻撃者制御の config.toml が小さいまま
+        # 極端に深くネストすると RecursionError（RuntimeError のサブクラスで
+        # TOMLDecodeError/OSError に含まれない）で無条件にクラッシュしうる
+        # (LOCI-CONFIG-TOML-RECURSION-DOS)。MemoryError も同じ資源枯渇系
+        # 例外として一緒に扱う（サイズ上限は事前チェック済みだが、大きな
+        # 単一の値が展開時に増幅するケースへの多層防御。
+        # LOCI-CONFIG-TOML-MEMORYERROR-DOS）。他の壊れた config と同じく
+        # デフォルトへフォールバックする。
+        error_message = f"failed to parse {config_path}: input too large or too deep"
         print(f"Warning: {error_message}", file=sys.stderr)
         return Config(config_error=error_message)
 
-    distill: dict[str, Any] = data.get("distill", {})
+    raw_distill = data.get("distill", {})
+    if not isinstance(raw_distill, dict):
+        print("Warning: distill must be a TOML table, ignoring.", file=sys.stderr)
+        raw_distill = {}
+    distill: dict[str, Any] = raw_distill
 
     # model は TOML 未設定なら None のまま保持し、client 解決後（下部）に client
     # 種別に応じたデフォルトへ委ねる。ここで claude 専用の DEFAULT_DISTILL_MODEL
@@ -96,14 +169,23 @@ def load_config(project_root: Path) -> Config:
         model = None
 
     batch_limit = distill.get("batch_limit", DEFAULT_DISTILL_BATCH_LIMIT)
-    if not isinstance(batch_limit, int) or batch_limit < 1:
+    if (
+        not isinstance(batch_limit, int)
+        or batch_limit < 1
+        or batch_limit > MAX_DISTILL_BATCH_LIMIT
+    ):
         print(
-            "Warning: distill.batch_limit must be a positive integer, using default.",
+            "Warning: distill.batch_limit must be a positive integer no greater "
+            f"than {MAX_DISTILL_BATCH_LIMIT}, using default.",
             file=sys.stderr,
         )
         batch_limit = DEFAULT_DISTILL_BATCH_LIMIT
 
-    index: dict[str, Any] = data.get("index", {})
+    raw_index = data.get("index", {})
+    if not isinstance(raw_index, dict):
+        print("Warning: index must be a TOML table, ignoring.", file=sys.stderr)
+        raw_index = {}
+    index: dict[str, Any] = raw_index
 
     min_chars = index.get("min_chars", DEFAULT_INDEX_MIN_CHARS)
     if not isinstance(min_chars, int) or min_chars < 1:
@@ -136,6 +218,20 @@ def load_config(project_root: Path) -> Config:
             file=sys.stderr,
         )
         base_url = None
+    elif isinstance(base_url, str):
+        validated = _validate_distill_base_url(
+            base_url,
+            allowed_remote_origins=_allowed_remote_origins(),
+        )
+        if validated is None:
+            print(
+                "Warning: distill.base_url must be a loopback http(s) URL with no "
+                f"userinfo or match {REMOTE_DISTILL_ORIGINS_ENV}.",
+                file=sys.stderr,
+            )
+            base_url = None
+        else:
+            base_url = validated
 
     if provider == "openai" and (base_url is None or not base_url.strip()):
         print(
@@ -151,11 +247,28 @@ def load_config(project_root: Path) -> Config:
     distill_client: str | None
     distill_unconfigured: bool
     if isinstance(raw_client, str) and raw_client in VALID_DISTILL_CLIENT_IDS:
-        distill_client = raw_client
-        distill_unconfigured = False
+        if _requires_remote_client_grant(raw_client) and raw_client not in _allowed_remote_clients():
+            print(
+                f"Warning: distill.client '{raw_client}' requires an explicit "
+                f"{REMOTE_DISTILL_CLIENTS_ENV} grant, treating distill as unconfigured.",
+                file=sys.stderr,
+            )
+            distill_client = None
+            distill_unconfigured = True
+        elif raw_client == "openai-compat" and base_url is None:
+            print(
+                "Warning: distill.client 'openai-compat' requires a valid "
+                "distill.base_url, treating distill as unconfigured.",
+                file=sys.stderr,
+            )
+            distill_client = None
+            distill_unconfigured = True
+        else:
+            distill_client = raw_client
+            distill_unconfigured = False
     elif isinstance(raw_client, str):
         print(
-            f"Warning: unknown distill.client '{raw_client}', "
+            f"Warning: unknown distill.client '{sanitize_terminal_text(raw_client)}', "
             "treating distill as unconfigured.",
             file=sys.stderr,
         )
@@ -164,14 +277,26 @@ def load_config(project_root: Path) -> Config:
     elif provider_specified:
         # provider/base_url はここまでの検証で安全な値に確定済み（例: openai だが
         # base_url 欠落は "claude" にフォールバック済み）。それを踏まえて解決する。
-        distill_unconfigured = False
+        candidate_client: str
         if provider == "claude":
-            distill_client = "claude-cli"
+            candidate_client = "claude-cli"
         else:
             # provider = "openai": Ollama のデフォルトポート(11434)を使っていれば
             # ローカル FT (ollama-ft) とみなし、それ以外は汎用 openai-compat とする。
             is_ollama = bool(base_url) and "11434" in base_url
-            distill_client = "ollama-ft" if is_ollama else "openai-compat"
+            candidate_client = "ollama-ft" if is_ollama else "openai-compat"
+        if _requires_remote_client_grant(candidate_client) and candidate_client not in _allowed_remote_clients():
+            print(
+                f"Warning: distill.provider resolves to remote client '{candidate_client}', "
+                f"which requires an explicit {REMOTE_DISTILL_CLIENTS_ENV} grant. "
+                "Treating distill as unconfigured.",
+                file=sys.stderr,
+            )
+            distill_client = None
+            distill_unconfigured = True
+        else:
+            distill_client = candidate_client
+            distill_unconfigured = False
     else:
         distill_client = None
         distill_unconfigured = True
@@ -193,3 +318,78 @@ def load_config(project_root: Path) -> Config:
         distill_client=distill_client,
         distill_unconfigured=distill_unconfigured,
     )
+
+
+def _validate_distill_base_url(
+    raw: str, *, allowed_remote_origins: frozenset[str]
+) -> str | None:
+    """安全な distill.base_url を返す。
+
+    project-local config は loopback endpoint だけを既定で許可する。リモート endpoint
+    は、ユーザー環境が exact origin を許可した場合だけ許可する。file:// と userinfo
+    付き URL は送信先差し替えに使えるため常に拒否する。
+    """
+    candidate = raw.strip()
+    origin = _normalized_origin(candidate, allow_path=True)
+    if origin is None:
+        return None
+    parsed = urlparse(candidate)
+    if _is_loopback_host(parsed.hostname or "") or origin in allowed_remote_origins:
+        return candidate
+    return None
+
+
+def _allowed_remote_origins() -> frozenset[str]:
+    """ユーザー環境が明示した comma-separated remote origins を正規化する。"""
+    raw = os.environ.get(REMOTE_DISTILL_ORIGINS_ENV, "")
+    return frozenset(
+        origin
+        for value in raw.split(",")
+        if (origin := _normalized_origin(value.strip(), allow_path=False)) is not None
+    )
+
+
+def _allowed_remote_clients() -> frozenset[str]:
+    """ユーザー環境が明示した remote CLI client ID だけを返す。"""
+    return frozenset(
+        client
+        for raw_client in os.environ.get(REMOTE_DISTILL_CLIENTS_ENV, "").split(",")
+        if (client := raw_client.strip()) in REMOTE_CLI_DISTILL_CLIENT_IDS
+    )
+
+
+def _requires_remote_client_grant(client_id: str) -> bool:
+    """repository config からの選択に user-environment grant が必要な client を判定する。"""
+    return client_id in REMOTE_CLI_DISTILL_CLIENT_IDS
+
+
+def _normalized_origin(value: str, *, allow_path: bool) -> str | None:
+    """http(s) URL を scheme/host/port の exact-comparison 用 origin に正規化する。"""
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or (not allow_path and parsed.path not in {"", "/"})
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    default_port = 80 if parsed.scheme == "http" else 443
+    port_part = "" if port is None or port == default_port else f":{port}"
+    return f"{parsed.scheme}://{parsed.hostname}{port_part}"
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    """DNS を解決せず、literal loopback IP または localhost だけを許可する。"""
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False

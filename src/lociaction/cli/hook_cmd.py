@@ -6,16 +6,16 @@ from typing import Annotated
 
 import typer
 
-hook_app = typer.Typer(help="Harness hook 管理")
+hook_app = typer.Typer(help="Manage harness lifecycle hooks")
 
 
 @hook_app.command("install")
 def hook_install(
     harness: Annotated[
-        str, typer.Option("--harness", help="対象 harness（既定: claude）")
+        str, typer.Option("--harness", help="Target harness (default: claude)")
     ] = "claude",
 ) -> None:
-    """Harness の lifecycle automation を設定する。"""
+    """Install native lifecycle automation for a harness."""
     from lociaction.adapters.harness.hooks import hooks_for
     from lociaction.config import load_config
     from lociaction.hooks import SettingsLoadError
@@ -38,10 +38,10 @@ def hook_install(
 @hook_app.command("uninstall")
 def hook_uninstall(
     harness: Annotated[
-        str, typer.Option("--harness", help="対象 harness（既定: claude）")
+        str, typer.Option("--harness", help="Target harness (default: claude)")
     ] = "claude",
 ) -> None:
-    """Harness の native lifecycle automation を解除する。"""
+    """Remove native lifecycle automation for a harness."""
     from lociaction.adapters.harness.hooks import hooks_for
     from lociaction.hooks import SettingsLoadError
 

@@ -19,6 +19,13 @@ from typing import Annotated
 
 import typer
 
+from lociaction.cli.errors import abort_not_initialized
+from lociaction.utils import sanitize_terminal_text
+
+
+def _echo_empty_results(json_output: bool) -> None:
+    typer.echo("[]" if json_output else "No results found.")
+
 
 def _fetchall_and_close(con, query: str, parameters: tuple[object, ...]):
     """Execute a single lookup while guaranteeing its short-lived connection closes."""
@@ -29,15 +36,15 @@ def _fetchall_and_close(con, query: str, parameters: tuple[object, ...]):
 
 
 def search(
-    query: Annotated[str, typer.Argument(help="検索クエリ")],
-    limit: Annotated[int, typer.Option("--limit", "-n", help="返す件数")] = 5,
-    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    query: Annotated[str, typer.Argument(help="Search query")],
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum results")] = 5,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON output")] = False,
     branch: Annotated[
         str | None,
-        typer.Option("--branch", "-b", help="ブランチ名で絞り込む（部分一致）"),
+        typer.Option("--branch", "-b", help="Filter by git branch (substring match)"),
     ] = None,
 ) -> None:
-    """BM25(V) + HNSW(D) RRF でクエリに近い過去会話を返す"""
+    """Search past conversations with BM25 + HNSW fused by RRF."""
     from lociaction.embedder import Embedder
     from lociaction.paths import db_path, find_project_root
     from lociaction.search import search_combined
@@ -46,8 +53,7 @@ def search(
     db = db_path(root)
 
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        abort_not_initialized()
 
     from lociaction.db import check_drift
 
@@ -63,7 +69,7 @@ def search(
     results = search_combined(db, query, query_vec, limit=limit, branch=branch)
 
     if not results:
-        typer.echo("No results found.")
+        _echo_empty_results(json_output)
         return
 
     if json_output:
@@ -85,19 +91,23 @@ def search(
         for i, r in enumerate(results, 1):
             typer.echo(f"\n[{i}] score={r.score:.4f}")
             if r.exchange_core:
-                typer.echo(f"    {r.exchange_core}")
+                typer.echo(f"    {sanitize_terminal_text(r.exchange_core)}")
             for sym in r.symbols[:2]:
-                typer.echo(f"    {sym['file']}:{sym['line']}  {sym['name']}")
+                name = sanitize_terminal_text(str(sym["name"]))
+                file_path = sanitize_terminal_text(str(sym["file"]))
+                typer.echo(f"    {file_path}:{sym['line']}  {name}")
             if r.verbatim_ref:
-                typer.echo(f"    {r.verbatim_ref}")
+                typer.echo(f"    {sanitize_terminal_text(r.verbatim_ref)}")
 
 
 def context(
     target: Annotated[
         str | None,
         typer.Argument(
-            help='<file>[:<symbol-or-line>]  例: "src/foo.py:greet"（U1、主な使い方）'
-            ' / "src/foo.py"（U2） / "src/foo.py:142"（行番号、IDE選択範囲用）'
+            help=(
+                '<file>[:<symbol-or-line>]  e.g. "src/foo.py:greet" (U1, primary) '
+                '/ "src/foo.py" (U2) / "src/foo.py:142" (line; IDE selection)'
+            )
         ),
     ] = None,
     symbol: Annotated[
@@ -105,23 +115,23 @@ def context(
         typer.Option(
             "--symbol",
             "-s",
-            help="シンボル名（部分一致・非推奨）。ファイル指定付きの位置引数を推奨",
+            help="Symbol name (substring; deprecated). Prefer the positional file target",
         ),
     ] = None,
-    limit: Annotated[int, typer.Option("--limit", "-n", help="返す件数")] = 5,
-    json_output: Annotated[bool, typer.Option("--json", help="JSON で出力")] = False,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum results")] = 5,
+    json_output: Annotated[bool, typer.Option("--json", help="JSON output")] = False,
     full: Annotated[
         bool,
-        typer.Option("--full", help="全文（user_content / agent_content）を含める"),
+        typer.Option("--full", help="Include full user_content / agent_content"),
     ] = False,
     branch: Annotated[
         str | None,
-        typer.Option("--branch", "-b", help="ブランチ名で絞り込む（部分一致）"),
+        typer.Option("--branch", "-b", help="Filter by git branch (substring match)"),
     ] = None,
 ) -> None:
-    """コードから会話を思い出す（design §6.1 主機能）。
+    """Recall conversations from a code location (primary lookup).
 
-    位置引数（U1/U2）があればそちらを使う。無ければ --symbol/--branch にフォールバックする。
+    Uses the positional target when present; otherwise falls back to --symbol/--branch.
     """
     if target is not None:
         if symbol is not None or branch is not None:
@@ -143,8 +153,7 @@ def context(
     db = db_path(root)
 
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        abort_not_initialized()
 
     con = get_connection(db)
 
@@ -231,7 +240,7 @@ def context(
         )
 
     if not rows:
-        typer.echo("No results found.")
+        _echo_empty_results(json_output)
         return
 
     if json_output:
@@ -272,20 +281,29 @@ def context(
         for i, r in enumerate(rows, 1):
             if symbol is not None:
                 # Symbol mode display
-                typer.echo(f"\n[{i}] {r['symbol_kind']} {r['symbol_name']}")
-                typer.echo(f"    {r['file_path']}:{r['line']}")
-                typer.echo(f"    {r['signature']}")
-                if r["exchange_core"]:
-                    typer.echo(f"    Core: {r['exchange_core']}")
-                typer.echo(f"    {r['source_path']}:ply={r['ply_start']}")
-            else:
-                # Branch-only mode display
                 typer.echo(
-                    f"\n[{i}] exchange_id={r['exchange_id']} git_branch={r['git_branch']}"
+                    f"\n[{i}] {sanitize_terminal_text(r['symbol_kind'])} "
+                    f"{sanitize_terminal_text(r['symbol_name'])}"
+                )
+                typer.echo(
+                    f"    {sanitize_terminal_text(r['file_path'])}:{r['line']}"
+                )
+                typer.echo(f"    {sanitize_terminal_text(r['signature'])}")
+                if r["exchange_core"]:
+                    typer.echo(f"    Core: {sanitize_terminal_text(r['exchange_core'])}")
+                typer.echo(
+                    f"    {sanitize_terminal_text(r['source_path'])}:ply={r['ply_start']}"
+                )
+            else:
+                typer.echo(
+                    f"\n[{i}] exchange_id={r['exchange_id']} "
+                    f"git_branch={sanitize_terminal_text(r['git_branch'])}"
                 )
                 if r["exchange_core"]:
-                    typer.echo(f"    Core: {r['exchange_core']}")
-                typer.echo(f"    {r['source_path']}:ply={r['ply_start']}")
+                    typer.echo(f"    Core: {sanitize_terminal_text(r['exchange_core'])}")
+                typer.echo(
+                    f"    {sanitize_terminal_text(r['source_path'])}:ply={r['ply_start']}"
+                )
 
 
 # ---- U1/U2（design §6.1・§6.2） ----
@@ -394,21 +412,24 @@ def _print_context_hits(hits, json_output: bool, full: bool) -> None:
             label = h.symbol_name or h.file_path
             source_note = "" if h.distilled else " [undistilled: code-touch based]"
             typer.echo(
-                f"\n[{i}] {h.match_kind} (confidence={h.confidence:.2f}) {label}{source_note}"
+                f"\n[{i}] {h.match_kind} (confidence={h.confidence:.2f}) "
+                f"{sanitize_terminal_text(label)}{source_note}"
             )
-            typer.echo(f"    {h.file_path}")
+            typer.echo(f"    {sanitize_terminal_text(h.file_path)}")
             if h.exchange_core:
-                typer.echo(f"    Core: {h.exchange_core}")
+                typer.echo(f"    Core: {sanitize_terminal_text(h.exchange_core)}")
             if h.verbatim_ref:
-                typer.echo(f"    {h.verbatim_ref}")
+                typer.echo(f"    {sanitize_terminal_text(h.verbatim_ref)}")
             if h.context:
                 labels = {
                     "ply_adjacent": "同一会話の前後",
                     "parent_session": "親会話（同一ファイル編集）",
                 }
                 for s in h.context:
+                    preview = s.exchange_core or (s.user_content or "")[:80]
                     typer.echo(
-                        f"    + [{labels.get(s.relation, s.relation)}] {s.exchange_core or s.user_content[:80]}"
+                        f"    + [{labels.get(s.relation, s.relation)}] "
+                        f"{sanitize_terminal_text(preview)}"
                     )
 
 
@@ -425,8 +446,7 @@ def _context_u1_u2(target: str, limit: int, json_output: bool, full: bool) -> No
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        abort_not_initialized()
 
     parsed = parse_context_target(target)
     file_path = _resolve_target_file_path(parsed.file_path, str(root))
@@ -462,7 +482,7 @@ def _context_u1_u2(target: str, limit: int, json_output: bool, full: bool) -> No
         hits = _semantic_fallback_hits(db, file_path, symbol_name, limit)
 
     if not hits:
-        typer.echo("No results found.")
+        _echo_empty_results(json_output)
         return
 
     _print_context_hits(hits, json_output, full)

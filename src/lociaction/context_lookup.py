@@ -299,16 +299,11 @@ def _file_rows(
     con: sqlite3.Connection,
     file_path: str,
     alias_paths: tuple[str, ...] = (),
-    branch: str | None = None,
 ) -> list[sqlite3.Row]:
     paths = (file_path, *alias_paths)
     placeholders = ",".join("?" for _ in paths)
     where = f"ce.file_path IN ({placeholders})"
-    params: tuple[object, ...] = paths
-    if branch is not None:
-        where += " AND e.git_branch LIKE ?"
-        params = (*paths, f"%{branch}%")
-    return _dedup_by_exchange(_query_rows(con, where, params))
+    return _dedup_by_exchange(_query_rows(con, where, paths))
 
 
 def _directory_rows(con: sqlite3.Connection, file_path: str) -> list[sqlite3.Row]:
@@ -463,24 +458,16 @@ def resolve_u2(
     file_path: str,
     limit: int,
     alias_paths: tuple[str, ...] = (),
-    branch: str | None = None,
 ) -> list[ContextHit]:
     """U2: file(1.00) → directory(0.30) の順に試す（design §6.2）。
 
     file 段は「このファイルについて何が決まっているか」を知りたい用途なので、
     一番良い1件だけでなく、シンボルごとにまとめて複数返す。semantic 段は
     呼び出し側の責務。`alias_paths` は resolve_u1 と同じ意味（design §8.2）。
-
-    `branch` を渡すと file 段を `e.git_branch LIKE` で AND する（`loci recall
-    --file X --branch Y`）。このときは下位段へ落とさない — 別ファイルの
-    directory/touch ヒットは AND を壊す。
     """
-    rows = _file_rows(con, file_path, alias_paths, branch=branch)
+    rows = _file_rows(con, file_path, alias_paths)
     if rows:
         return [_row_to_hit(con, r, "file", _TIER_FILE_CONFIDENCE_U2) for r in rows[:limit]]
-
-    if branch is not None:
-        return []
 
     rows = _directory_rows(con, file_path)
     if rows:

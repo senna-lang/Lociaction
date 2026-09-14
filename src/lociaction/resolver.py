@@ -24,6 +24,10 @@ import tree_sitter_rust as tsrust
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
+_MAX_NESTING_DEPTH = 1000
+_NESTING_OPEN = b"([{"
+_NESTING_CLOSE = b")]}"
+
 
 @dataclass
 class Symbol:
@@ -63,6 +67,23 @@ def _signature(node: Node, source: bytes) -> str:
     return text.split("\n")[0].strip()
 
 
+def _nesting_depth_exceeds(source: bytes, limit: int) -> bool:
+    """括弧・波括弧・大括弧の最大ネスト深さが limit を超えるかを見積もる。
+
+    文字列/コメント内容は区別しない粗い近似だが、native parser のクラッシュを
+    避けるための安全側の判定としては十分（誤って弾いても ingest 全体は止めない）。
+    """
+    depth = 0
+    for byte in source:
+        if byte in _NESTING_OPEN:
+            depth += 1
+            if depth > limit:
+                return True
+        elif byte in _NESTING_CLOSE:
+            depth -= 1
+    return False
+
+
 class SymbolResolver:
     """ソースファイルからシンボルを抽出する"""
 
@@ -78,29 +99,40 @@ class SymbolResolver:
         `extract` の読み取り専用部分を切り出したもの。呼び出し側が git blob 等
         ディスク以外から取得したソースを渡せるようにするため（design: touch 時点
         の symbol 境界を再現する point-in-time resolve、core/ingest.py 参照）。
+        病的に深い AST はファイル単位で空リストを返し、ingest/distill 全体を止めない。
+
+        ネイティブ tree-sitter の `parser.parse()` 自体は Python の
+        RecursionError で捕捉できない C レベルの再帰を持ちうる
+        (LOCI-RESOLVER-PARSE-DOS-01)。parse() 実行前に括弧ネスト深さを
+        安全に見積もり、閾値超過ならパースせず空リストを返す。
         """
         suffix = Path(path_hint).suffix.lower()
         language = _LANGUAGES.get(suffix)
         if language is None:
             return []
+        if _nesting_depth_exceeds(source, _MAX_NESTING_DEPTH):
+            return []
 
         parser = Parser(language)
         tree = parser.parse(source)
 
-        if suffix == ".py":
-            return self._extract_python(tree.root_node, source, path_hint, suffix)
-        if suffix in (".ts", ".tsx"):
-            return self._extract_typescript(tree.root_node, source, path_hint, suffix)
-        if suffix == ".go":
-            return self._extract_go(tree.root_node, source, path_hint, suffix)
-        if suffix == ".rs":
-            return self._extract_rust(tree.root_node, source, path_hint, suffix)
-        if suffix == ".java":
-            return self._extract_java(tree.root_node, source, path_hint, suffix)
-        if suffix == ".cs":
-            return self._extract_csharp(tree.root_node, source, path_hint, suffix)
-        if suffix == ".rb":
-            return self._extract_ruby(tree.root_node, source, path_hint, suffix)
+        try:
+            if suffix == ".py":
+                return self._extract_python(tree.root_node, source, path_hint, suffix)
+            if suffix in (".ts", ".tsx"):
+                return self._extract_typescript(tree.root_node, source, path_hint, suffix)
+            if suffix == ".go":
+                return self._extract_go(tree.root_node, source, path_hint, suffix)
+            if suffix == ".rs":
+                return self._extract_rust(tree.root_node, source, path_hint, suffix)
+            if suffix == ".java":
+                return self._extract_java(tree.root_node, source, path_hint, suffix)
+            if suffix == ".cs":
+                return self._extract_csharp(tree.root_node, source, path_hint, suffix)
+            if suffix == ".rb":
+                return self._extract_ruby(tree.root_node, source, path_hint, suffix)
+        except RecursionError:
+            return []
         return []
 
     # ---- Python ----

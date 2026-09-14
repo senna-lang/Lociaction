@@ -1,5 +1,4 @@
-"""loci init コマンドのテスト — 既存 exchange の蒸留スキップ機能"""
-
+"""loci init コマンドのテスト — 初期状態作成・.gitignore・既存 exchange の蒸留スキップ。"""
 from __future__ import annotations
 
 import json
@@ -47,7 +46,10 @@ def _no_distill_clients_by_default(monkeypatch):
 
 
 def _create_jsonl(
-    path: Path, num_exchanges: int = 3, char_sizes: list[int] | None = None
+    path: Path,
+    project_root: Path,
+    num_exchanges: int = 3,
+    char_sizes: list[int] | None = None,
 ) -> None:
     """テスト用の .jsonl ファイルを作成する（indexer の期待するフォーマットに準拠）
 
@@ -74,6 +76,7 @@ def _create_jsonl(
                     "parentUuid": f"agent-{i - 1}" if i > 0 else None,
                     "isMeta": False,
                     "timestamp": f"2026-01-01T00:0{i}:00.000Z",
+                    "cwd": str(project_root),
                     "message": {"role": "user", "content": user_text},
                 }
             )
@@ -85,6 +88,7 @@ def _create_jsonl(
                     "uuid": f"agent-{i}",
                     "parentUuid": f"user-{i}",
                     "timestamp": f"2026-01-01T00:0{i}:01.000Z",
+                    "cwd": str(project_root),
                     "message": {
                         "role": "assistant",
                         "content": [{"type": "text", "text": agent_text}],
@@ -116,6 +120,7 @@ def _setup_project_with_sessions(
     for i in range(num_files):
         _create_jsonl(
             projects_dir / f"session{i}.jsonl",
+            tmp_path,
             exchanges_per_file,
             char_sizes=char_sizes,
         )
@@ -138,6 +143,100 @@ def test_init_creates_db(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
     assert (tmp_path / ".lociaction" / "memory.db").exists()
+
+
+def test_init_creates_gitignore_entry_for_local_state(tmp_path, monkeypatch):
+    """新規 init はローカル状態ディレクトリを .gitignore に追加する。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+
+    result = runner.invoke(app, ["init", "--no-local-distiller"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".gitignore").read_text() == ".lociaction/\n"
+
+
+def test_init_appends_gitignore_entry_without_rewriting_user_content(
+    tmp_path, monkeypatch
+):
+    """末尾改行なしの既存 .gitignore には内容を保ったまま一行だけ追加する。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("# user rule\n*.log")
+
+    result = runner.invoke(app, ["init", "--no-local-distiller"])
+
+    assert result.exit_code == 0
+    assert gitignore.read_text() == "# user rule\n*.log\n.lociaction/"
+
+
+def test_init_does_not_duplicate_existing_gitignore_entry(tmp_path, monkeypatch):
+    """正確な .lociaction/ エントリがあれば init は .gitignore を変更しない。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    gitignore = tmp_path / ".gitignore"
+    original_content = "# user rule\n.lociaction/\n*.log\n"
+    gitignore.write_text(original_content)
+
+    result = runner.invoke(app, ["init", "--no-local-distiller"])
+
+    assert result.exit_code == 0
+    assert gitignore.read_text() == original_content
+    assert gitignore.read_text().splitlines().count(".lociaction/") == 1
+
+
+def test_ensure_lociaction_ignored_reappends_when_negated_by_later_rule(tmp_path):
+    """`.lociaction/` の直後に `!.lociaction/` があり実効的には無視されていない
+    場合、単純な文字列一致で誤って skip せず、末尾に再度追記して勝たせる
+    (LOCI-GITIGNORE-NEGATION-BYPASS)。"""
+    from lociaction.cli import _ensure_lociaction_ignored
+    from lociaction.ignore import parse_ignore_rules
+
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text(".lociaction/\n!.lociaction/\n")
+
+    _ensure_lociaction_ignored(tmp_path)
+
+    content = gitignore.read_text()
+    assert content.splitlines()[-1] == ".lociaction/"
+    assert parse_ignore_rules(content).matches(".lociaction/memory.db") is True
+
+
+def test_ensure_lociaction_ignored_appends_without_buffering_oversized_file(
+    tmp_path, monkeypatch
+):
+    """上限を超える既存 .gitignore は全文を読み解こうとせず、末尾に無条件で
+    追記するだけで安全に収束させる (LOCI-GITIGNORE-UNBOUNDED-READ)。"""
+    from lociaction.cli import _ensure_lociaction_ignored
+    from lociaction.ignore import parse_ignore_rules
+
+    monkeypatch.setattr("lociaction.ignore.MAX_IGNORE_FILE_BYTES", 16)
+    gitignore = tmp_path / ".gitignore"
+    original = "!.lociaction/\n" + ("a" * 64 + "\n") * 4
+    gitignore.write_text(original)
+
+    _ensure_lociaction_ignored(tmp_path)
+
+    content = gitignore.read_text()
+    assert content.startswith(original)
+    assert content.splitlines()[-1] == ".lociaction/"
+    assert parse_ignore_rules(content).matches(".lociaction/memory.db") is True
+
+
+def test_ensure_lociaction_ignored_rejects_symlinked_gitignore(tmp_path):
+    """.gitignore が symlink の場合、check-then-write の隙を作らず単一の
+    O_NOFOLLOW open で拒否する (LOCI-GITIGNORE-TOCTOU)。"""
+    from lociaction.cli import _ensure_lociaction_ignored
+
+    outside = tmp_path / "outside.gitignore"
+    outside.write_text("must remain unchanged")
+    (tmp_path / ".gitignore").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlinked .gitignore"):
+        _ensure_lociaction_ignored(tmp_path)
+
+    assert outside.read_text() == "must remain unchanged"
 
 
 def test_init_prints_banner(tmp_path, monkeypatch):
@@ -662,6 +761,26 @@ def test_init_per_file_index_error_continues(tmp_path, monkeypatch):
     assert (tmp_path / ".lociaction" / "memory.db").exists()
 
 
+def test_init_per_file_index_error_sanitizes_exception_text(tmp_path, monkeypatch):
+    """index_file の例外文字列に端末制御シーケンスが含まれても出力に残さない
+    (LOCI-TERMINAL-SANITIZE-INCONSISTENT)。"""
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
+
+    def _raising(*_args, **_kwargs):
+        raise RuntimeError("boom \x1b]8;;https://evil.test\x1b\\x")
+
+    monkeypatch.setattr("lociaction.indexer.index_file", _raising)
+
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n"
+    )
+
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+
+
 # ---- hook auto-install ----
 
 
@@ -793,6 +912,46 @@ def test_init_distill_embedder_setup_error_friendly_message(tmp_path, monkeypatc
     assert "loci distill" in result.output
     # DB はクリーンアップされず残っている（索引済み）
     assert (tmp_path / ".lociaction" / "memory.db").exists()
+
+
+def test_init_distill_error_progress_sanitizes_terminal_output(tmp_path, monkeypatch):
+    """init 中の蒸留 on_progress error callback も端末制御シーケンスを残さない
+    (LOCI-DISTILL-ERROR-ESCAPE-01)。"""
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
+
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+
+    def _fake_distill_all(db, **kwargs):
+        kwargs["on_progress"](1, 1, "boom \x1b]8;;https://evil.test\x1b\\x")
+        return (0, 1)
+
+    monkeypatch.setattr("lociaction.distiller.distill_all", _fake_distill_all)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="claude-cli",
+            label="Claude CLI",
+            state="ready",
+            reason="ready",
+            client=ModelClient(
+                id="claude-cli",
+                provider="claude",
+                model="claude-haiku-4-5-20251001",
+                base_url=None,
+                label="Claude CLI",
+            ),
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["init", "--distill-client", "claude-cli"],
+        input="1\n3\ny\n",
+    )
+
+    assert "\x1b" not in result.output
 
 
 # ---- distill client 選択フロー（discover/setup/select） ----
@@ -1026,6 +1185,59 @@ def test_init_distill_client_flag_ready_writes_config_without_prompt(
     assert 'client = "claude-cli"' in config
 
 
+
+def test_init_rejects_dangling_symlinked_config_toml_no_client(tmp_path, monkeypatch):
+    """config.toml がダングリング symlink の場合、Path.exists() の False 判定に
+    釣られて symlink 先へ書き込まない (LOCI-INIT-CONFIGTOML-SYMLINK-TOCTOU)。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    dangling_target = tmp_path / "outside" / "escaped-config.toml"
+    (lociaction_dir / "config.toml").symlink_to(dangling_target)
+
+    result = runner.invoke(app, ["init", "--no-local-distiller"])
+
+    assert result.exit_code == 1
+    assert not dangling_target.exists()
+    assert not dangling_target.parent.exists()
+
+
+def test_init_rejects_symlinked_config_toml_with_chosen_client(tmp_path, monkeypatch):
+    """chosen_client 経由でも config.toml symlink を write_client_config だけに
+    頼らず、init 側の probe でも拒否する (LOCI-INIT-CONFIGTOML-SYMLINK-TOCTOU)。"""
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    outside = tmp_path / "outside.toml"
+    outside.write_text("sentinel\n")
+    (lociaction_dir / "config.toml").symlink_to(outside)
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="claude-cli",
+            label="Claude CLI",
+            state="ready",
+            reason="ready",
+            client=ModelClient(
+                id="claude-cli",
+                provider="claude",
+                model="claude-haiku-4-5-20251001",
+                base_url=None,
+                label="Claude CLI",
+            ),
+        ),
+    )
+
+    result = runner.invoke(app, ["init", "--distill-client", "claude-cli"])
+
+    assert result.exit_code == 1
+    assert outside.read_text() == "sentinel\n"
+
 def test_init_distill_client_flag_not_ready_errors_without_fallback(
     tmp_path, monkeypatch
 ):
@@ -1093,3 +1305,19 @@ def test_init_distill_client_flag_unknown_id_errors(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--distill-client", "bogus"])
     assert result.exit_code == 1
     assert "Unknown distill client" in result.output
+
+
+def test_init_distill_client_flag_sanitizes_terminal_control_sequences(
+    tmp_path, monkeypatch
+):
+    """未知 client 名に含まれる OSC/CSI をエラー出力へ生で渡さない
+    （LOCI-INIT-TERMINAL-ESCAPE-01）。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    malicious_client = "bogus\x1b]8;;https://example.invalid\x07"
+
+    result = runner.invoke(app, ["init", "--distill-client", malicious_client])
+
+    assert result.exit_code == 1
+    assert malicious_client not in result.output
+    assert "\x1b" not in result.output

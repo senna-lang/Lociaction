@@ -48,15 +48,12 @@ _FILES_PATTERN = re.compile(
 def _is_external_path(path: str, project_root: str | None = None) -> bool:
     """プロジェクト外のパスか判定する。
 
-    絶対パス: project_root が指定されていれば code_touches.normalize_repo_path の
-    パス部品比較で判定する（文字列前方一致では隣接リポジトリ、例えば /home/u/repo と
-    /home/u/repo-other を誤って同一プロジェクトと判定してしまうため、これを避ける）。
-    相対パス、または project_root 不明時はハードコードマーカーでフォールバックする。
+    project_root が指定されていれば、absolute/relative を問わず
+    normalize_repo_path と同じ containment boundary で判定する。project_root 不明時は
+    外部ライブラリのハードコードマーカーでフォールバックする。
     """
-    if path.startswith("/"):
-        if project_root:
-            return normalize_repo_path(path, project_root) is None
-        # project_root 不明時はマーカーでフォールバック
+    if project_root:
+        return normalize_repo_path(path, project_root) is None
     return is_external_path(path)
 
 
@@ -65,8 +62,8 @@ def extract_files_touched(
 ) -> list[str]:
     """user_content + agent_content から regex でファイルパスを抽出する（重複排除・順序維持）
 
-    project_root が指定された場合、絶対パスはその配下のもののみ残す。
-    相対パスはハードコードマーカー（node_modules 等）でフィルタする。
+    project_root が指定された場合、absolute/relative を問わずその配下のものだけ残す。
+    project_root 不明時はハードコードマーカー（node_modules 等）でフィルタする。
     """
     text = user_content + "\n" + agent_content
     seen: set[str] = set()
@@ -341,15 +338,24 @@ def save_palace_object(
         )
 
         for file_str in palace.files_touched:
-            if symbol_cache is not None and file_str in symbol_cache:
-                syms = symbol_cache[file_str]
+            normalized_file = (
+                normalize_repo_path(file_str, project_root)
+                if project_root
+                else file_str
+            )
+            if normalized_file is None:
+                continue
+            if symbol_cache is not None and normalized_file in symbol_cache:
+                syms = symbol_cache[normalized_file]
             else:
-                resolved_path = Path(file_str)
-                if project_root and not resolved_path.is_absolute():
-                    resolved_path = Path(project_root) / resolved_path
+                resolved_path = (
+                    Path(project_root) / normalized_file
+                    if project_root
+                    else Path(file_str)
+                )
                 syms = resolver.extract(resolved_path)
                 if symbol_cache is not None:
-                    symbol_cache[file_str] = syms
+                    symbol_cache[normalized_file] = syms
             for sym in syms:
                 # Body-mention filter: skip symbol if not mentioned in exchange
                 # （単語境界つき。部分一致だと1文字シンボル名が全マッチしてしまう）

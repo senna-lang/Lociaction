@@ -107,7 +107,17 @@ def test_show_json_output(tmp_path, monkeypatch):
     assert "user_content" in data
     assert "agent_content" in data
     assert "ply_start" in data
+    assert "Do not paste" not in result.output
 
+
+def test_show_and_dump_help_warn_about_private_transcripts() -> None:
+    show_help = runner.invoke(app, ["show", "--help"])
+    dump_help = runner.invoke(app, ["dump", "--help"])
+    assert show_help.exit_code == 0, show_help.output
+    assert dump_help.exit_code == 0, dump_help.output
+    for output in (show_help.output, dump_help.output):
+        assert "credentials" in output
+        assert "Do not paste" in output
 
 
 def test_show_json_includes_ply_adjacent_context_for_traversal(tmp_path, monkeypatch):
@@ -156,7 +166,9 @@ def test_show_context_enables_chained_traversal(tmp_path, monkeypatch):
 
     # 起点: ex2 (中央) -> 前方の隣接 ex1 に飛ぶ -> そこからさらに ex0 が見える
     hop1 = json.loads(runner.invoke(app, ["show", "ex2", "--json"]).output)
-    before_ids = [c["exchange_id"] for c in hop1["context"] if c["relation"] == "ply_adjacent"]
+    before_ids = [
+        c["exchange_id"] for c in hop1["context"] if c["relation"] == "ply_adjacent"
+    ]
     assert "ex1" in before_ids
 
     hop2 = json.loads(runner.invoke(app, ["show", "ex1", "--json"]).output)
@@ -187,6 +199,7 @@ def test_show_text_output_lists_context_neighbors(tmp_path, monkeypatch):
     result = runner.invoke(app, ["show", "ex1"])
     assert result.exit_code == 0
     assert "ex0" in result.output
+
 
 # ---- loci dump --distilled ----
 
@@ -227,9 +240,7 @@ def test_dump_closes_connection_when_query_fails(tmp_path, monkeypatch):
     _db, con = _setup(tmp_path)
     con.close()
     failing_connection = FailingConnection()
-    monkeypatch.setattr(
-        "lociaction.db.get_connection", lambda _db: failing_connection
-    )
+    monkeypatch.setattr("lociaction.db.get_connection", lambda _db: failing_connection)
 
     result = runner.invoke(app, ["dump"])
 
@@ -265,6 +276,7 @@ def test_dump_json_format(tmp_path, monkeypatch):
     assert data[0]["exchange_core"] == "pool_size=5 を追加した"
     assert "rooms" in data[0]
     assert "date" in data[0]
+    assert "Do not paste" not in result.output
 
 
 def test_dump_limit(tmp_path, monkeypatch):

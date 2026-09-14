@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import typer
 
-server_app = typer.Typer(help="embedding サーバー管理")
+server_app = typer.Typer(help="Manage the embedding server")
 
-_SERVER_STARTUP_POLL_ATTEMPTS: int = 150  # サーバー起動確認のポーリング回数（0.2秒 × 150 = 最大30秒待機）
+_SERVER_STARTUP_POLL_ATTEMPTS: int = (
+    150  # サーバー起動確認のポーリング回数（0.2秒 × 150 = 最大30秒待機）
+)
 
 
 @server_app.command("start")
 def server_start() -> None:
-    """embedding サーバーをバックグラウンドで起動する"""
+    """Start the embedding server in the background."""
     import fcntl
     import os
     import subprocess
@@ -23,8 +25,9 @@ def server_start() -> None:
 
     root = find_project_root()
     if not db_path(root).exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     sock = sock_path(root)
     pid_path = server_pid_path(root)
@@ -80,7 +83,7 @@ def server_start() -> None:
 
 @server_app.command("stop")
 def server_stop() -> None:
-    """embedding サーバーを停止する"""
+    """Stop the embedding server."""
     import json as _json
     import socket as _socket
 
@@ -108,7 +111,7 @@ def server_stop() -> None:
 
 @server_app.command("status")
 def server_status() -> None:
-    """embedding サーバーの状態を確認する（read-only — 稼働中/応答なしを問わずソケットを削除しない）"""
+    """Report embedding-server status (read-only; never deletes the socket)."""
     from lociaction.embedder_server import ping_server
     from lociaction.paths import find_project_root, server_pid_path, sock_path
 

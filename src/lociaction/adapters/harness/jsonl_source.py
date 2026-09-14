@@ -22,6 +22,8 @@ from lociaction.utils import sha256
 LegacyParser = Callable[..., list]
 PathResolver = Callable[[Path], Path | None]
 ParentRefResolver = Callable[[Path], str | None]
+SessionPathValidator = Callable[[Path, Path], bool]
+
 
 
 class JsonlLogSource:
@@ -35,6 +37,7 @@ class JsonlLogSource:
         pattern: str = "*.jsonl",
         touch_adapter: Any | None = None,
         parent_ref_resolver: ParentRefResolver | None = None,
+        session_path_validator: SessionPathValidator | None = None,
     ) -> None:
         self.id = source_id
         self._resolve_path = resolve_path
@@ -42,6 +45,8 @@ class JsonlLogSource:
         self._pattern = pattern
         self._touch_adapter = touch_adapter
         self._parent_ref_resolver = parent_ref_resolver
+        self._session_path_validator = session_path_validator
+
 
     @property
     def parent_ref_resolver(self) -> ParentRefResolver | None:
@@ -49,16 +54,25 @@ class JsonlLogSource:
         return self._parent_ref_resolver
 
     def detect(self, project_root: Path) -> bool:
-        directory = self._resolve_path(project_root)
-        return directory is not None and any(directory.rglob(self._pattern))
+        return bool(self._session_paths(project_root))
 
-    def list_sessions(self, project_root: Path) -> list[CanonicalSession]:
+    def _session_paths(self, project_root: Path) -> list[Path]:
         directory = self._resolve_path(project_root)
         if directory is None:
             return []
+        paths = directory.rglob(self._pattern)
+        if self._session_path_validator is None:
+            return list(paths)
+        return [
+            path
+            for path in paths
+            if self._session_path_validator(path, project_root)
+        ]
+
+    def list_sessions(self, project_root: Path) -> list[CanonicalSession]:
         project_key = str(project_root.resolve())
         sessions: list[CanonicalSession] = []
-        for path in directory.rglob(self._pattern):
+        for path in self._session_paths(project_root):
             resolved_path = path.resolve()
             source_session_id = str(resolved_path)
             sessions.append(

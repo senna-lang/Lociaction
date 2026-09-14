@@ -784,6 +784,23 @@ def _migrate_v14_remove_dead_schema(con: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v15_add_exchanges_session_index(con: sqlite3.Connection) -> None:
+    """Migration v15: exchanges(session_id) にインデックスを追加する。
+
+    `loci recall` の再設計（セッション粒度の一覧・関連度集約・要点ダイジェスト）で
+    `WHERE session_id IN (...)`/`GROUP BY session_id` が主経路になった。既存は
+    この列にインデックスが無く、蓄積が進むにつれフルスキャンになる。
+    """
+    exchanges_exists = con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='exchanges'"
+    ).fetchone()
+    if exchanges_exists is None:
+        return
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_exchanges_session_id ON exchanges(session_id)"
+    )
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migrate_v1_add_last_ply_end,
     _migrate_v2_add_distill_status,
@@ -799,6 +816,7 @@ _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migrate_v12_add_exchange_conversation_ply_index,
     _migrate_v13_repair_legacy_claude_mislabel,
     _migrate_v14_remove_dead_schema,
+    _migrate_v15_add_exchanges_session_index,
 ]
 
 
@@ -1037,6 +1055,21 @@ def _run_migrations(con: sqlite3.Connection) -> None:
                 raise
 
 
+def _reject_symlinked_db_files(db_path: Path) -> None:
+    """SQLite state leaves must not redirect project-local writes outside the project.
+
+    `db_path.parent`（`.lociaction/`）自体も再確認する。この関数は init_db()/
+    get_connection() の実書き込み直前（mkdir・connect の直前）で呼ばれるため、
+    CLI 起動時の1回だけの symlink チェックとは異なり、対話プロンプト等で開く
+    TOCTOU window を作らない（LOCI-INIT-LOCIACTION-SYMLINK-TOCTOU）。
+    """
+    if db_path.parent.is_symlink():
+        raise ValueError(f"refusing symlinked state directory: {db_path.parent}")
+    for path in (db_path, *(db_path.parent / (db_path.name + suffix) for suffix in ("-wal", "-shm"))):
+        if path.is_symlink():
+            raise ValueError(f"refusing symlinked database state file: {path}")
+
+
 def _secure_db_files(db_path: Path) -> None:
     """会話・コードの逐語データを含む DB 関連ファイルを所有者以外から遮蔽する（issue #36）。
 
@@ -1063,6 +1096,7 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     接続の度に `_secure_db_files` で DB ディレクトリ・本体・サイドカーの権限を
     再確認する（issue #36: 遅延生成される -wal/-shm の露出防止）。
     """
+    _reject_symlinked_db_files(db_path)
     con = sqlite3.connect(db_path, timeout=10.0)
     _secure_db_files(db_path)
     con.enable_load_extension(True)
@@ -1156,6 +1190,7 @@ def _backfill_parent_session_ref(con: sqlite3.Connection) -> None:
 
 def init_db(db_path: Path) -> None:
     """DB を初期化してスキーマを作成する（冪等）"""
+    _reject_symlinked_db_files(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = get_connection(db_path)
     # DB ディレクトリ・本体・WAL/SHM サイドカーの権限は get_connection が
@@ -1212,6 +1247,7 @@ def init_db(db_path: Path) -> None:
                 agent_provider    TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_exchanges_conversation_ply ON exchanges(conversation_id, ply_start);
+            CREATE INDEX IF NOT EXISTS idx_exchanges_session_id ON exchanges(session_id);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS exchanges_fts USING fts5(
                 user_content,

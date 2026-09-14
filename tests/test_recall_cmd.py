@@ -1,14 +1,14 @@
-"""loci recall コマンドの出力契約テスト
+"""loci recall コマンドの出力契約テスト（recall 再設計）。
 
-file/branch の独立 AND フィルタ、context と同じ要約出力（exchange_core /
-specific_context / verbatim_ref）、および同一関連度の recency 減衰並び替え。
+セッション一覧（新しい順／関連度順）・`--session` ダイジェスト・`--file`/
+`--branch` フィルタ・エラー系（session未初期化・曖昧な session_ref・
+query と --session の同時指定）を検証する。
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -18,7 +18,6 @@ from typer.testing import CliRunner
 
 from lociaction.cli import app
 from lociaction.db import get_connection, init_db
-from lociaction.models import FusedResult
 
 runner = CliRunner()
 
@@ -27,7 +26,7 @@ LONG = "x" * 200
 
 @pytest.fixture(autouse=True)
 def _stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
-    """recall は search_combined を呼ぶため、モデルロードを避ける。"""
+    """キーワード一覧モードは search_combined を呼ぶため、モデルロードを避ける。"""
     mock = MagicMock()
     mock.embed.return_value = np.zeros(384, dtype=np.float32)
     monkeypatch.setattr("lociaction.embedder.Embedder", lambda: mock)
@@ -41,306 +40,388 @@ def _setup(tmp_path: Path) -> tuple[Path, sqlite3.Connection]:
     return db, get_connection(db)
 
 
-def _insert_recall_row(
+def _insert_session(
     con: sqlite3.Connection,
     *,
-    ex_id: str,
-    conv_id: str,
-    file_path: str,
-    symbol_name: str,
-    git_branch: str | None,
-    ts: str,
-    source_path: str = "/fake/session.jsonl",
-    ply_start: int = 0,
-    core: str = "core summary",
-    specific: str = "specific detail",
-    user_content: str | None = None,
-    agent_content: str | None = None,
+    session_id: str,
+    harness: str = "claude",
+    git_branch_last: str | None = None,
+    updated_at: str,
 ) -> None:
     con.execute(
-        "INSERT OR IGNORE INTO conversations (id, source_path, started_at) VALUES (?,?,?)",
-        (conv_id, source_path, ts),
+        """INSERT INTO sessions
+           (id, harness, source_session_id, primary_ref, project_key,
+            started_at, updated_at, git_branch_last)
+           VALUES (?, ?, ?, ?, '', ?, ?, ?)""",
+        (session_id, harness, session_id, session_id, updated_at, updated_at, git_branch_last),
     )
+
+
+def _insert_exchange(
+    con: sqlite3.Connection,
+    *,
+    exchange_id: str,
+    session_id: str,
+    ply_start: int = 0,
+    user_content: str | None = None,
+    agent_content: str | None = None,
+    distill_status: str = "distilled",
+    core: str = "core summary",
+    specific: str = "specific detail",
+    file_path: str | None = None,
+) -> None:
     con.execute(
-        """INSERT OR IGNORE INTO exchanges
-           (id, conversation_id, ply_start, ply_end, user_content, agent_content, git_branch)
-           VALUES (?,?,?,?,?,?,?)""",
+        """INSERT INTO exchanges
+           (id, conversation_id, ply_start, ply_end, user_content, agent_content,
+            session_id, distill_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            ex_id,
-            conv_id,
+            exchange_id,
+            f"conv-{session_id}",
             ply_start,
-            ply_start + 3,
+            ply_start + 1,
             user_content or ("user " + LONG),
             agent_content or ("agent " + LONG),
-            git_branch,
+            session_id,
+            distill_status,
         ),
     )
     con.execute(
-        """INSERT OR IGNORE INTO palace_objects
-           (id, exchange_id, exchange_core, specific_context, distill_text)
-           VALUES (?,?,?,?,?)""",
-        (f"p-{ex_id}", ex_id, core, specific, core),
+        """INSERT INTO palace_objects (id, exchange_id, exchange_core, specific_context, distill_text)
+           VALUES (?, ?, ?, ?, ?)""",
+        (f"p-{exchange_id}", exchange_id, core, specific, core),
     )
-    symbol_id = f"sym-{file_path}-{symbol_name}"
-    con.execute(
-        """INSERT OR IGNORE INTO code_symbols
-           (id, file_path, symbol_name, symbol_kind, signature, line, end_line, lang, resolved_at)
-           VALUES (?, ?, ?, 'function', 'def f():', 1, 2, '.py', ?)""",
-        (symbol_id, file_path, symbol_name, ts),
-    )
-    con.execute(
-        """INSERT OR IGNORE INTO code_edges
-           (id, exchange_id, file_path, symbol_id, edge_kind, granularity, confidence, added, ts)
-           VALUES (?, ?, ?, ?, 'edit', 'line', 1.0, 1, ?)""",
-        (f"edge-{ex_id}", ex_id, file_path, symbol_id, ts),
-    )
-    con.commit()
+    if file_path is not None:
+        con.execute(
+            "INSERT INTO exchange_files (exchange_id, file_path) VALUES (?, ?)",
+            (exchange_id, file_path),
+        )
 
 
 def _invoke_recall(args: list[str]):
     return runner.invoke(app, ["recall", *args])
 
 
-def test_recall_file_only_returns_file_hits(tmp_path, monkeypatch):
+# ---- not initialized ----
+
+
+def test_recall_not_initialized_exits_1(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _db, con = _setup(tmp_path)
-    _insert_recall_row(
-        con,
-        ex_id="ex-foo",
-        conv_id="conv-foo",
-        file_path="src/foo.py",
-        symbol_name="greet",
-        git_branch="main",
-        ts="2026-08-01T00:00:00Z",
-        source_path="/fake/foo.jsonl",
-    )
-    _insert_recall_row(
-        con,
-        ex_id="ex-bar",
-        conv_id="conv-bar",
-        file_path="src/bar.py",
-        symbol_name="other",
-        git_branch="main",
-        ts="2026-08-02T00:00:00Z",
-        source_path="/fake/bar.jsonl",
-    )
-    con.close()
 
-    result = _invoke_recall(["--file", "src/foo.py", "--json"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    ids = {row["exchange_id"] for row in data}
-    assert "ex-foo" in ids
-    assert "ex-bar" not in ids
+    result = _invoke_recall([])
+
+    assert result.exit_code == 1
+    assert "Not initialized" in result.output
 
 
-def test_recall_branch_only_returns_branch_hits(tmp_path, monkeypatch):
+# ---- bare recall: session list, newest first ----
+
+
+def test_recall_bare_lists_sessions_newest_first(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _db, con = _setup(tmp_path)
-    _insert_recall_row(
-        con,
-        ex_id="ex-main",
-        conv_id="conv-main",
-        file_path="src/foo.py",
-        symbol_name="greet",
-        git_branch="main",
-        ts="2026-08-01T00:00:00Z",
-        source_path="/fake/main.jsonl",
-    )
-    _insert_recall_row(
-        con,
-        ex_id="ex-feat",
-        conv_id="conv-feat",
-        file_path="src/foo.py",
-        symbol_name="greet2",
-        git_branch="feat/33",
-        ts="2026-08-02T00:00:00Z",
-        source_path="/fake/feat.jsonl",
-    )
-    con.close()
-
-    result = _invoke_recall(["--branch", "feat/33", "--json"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert len(data) > 0
-    ids = {row["exchange_id"] for row in data}
-    assert "ex-feat" in ids
-    assert "ex-main" not in ids
-    assert data[0]["git_branch"] == "feat/33"
-
-
-def test_recall_file_and_branch_combined_and_filter(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _db, con = _setup(tmp_path)
-    _insert_recall_row(
-        con,
-        ex_id="ex-foo-main",
-        conv_id="conv-foo-main",
-        file_path="src/foo.py",
-        symbol_name="greet",
-        git_branch="main",
-        ts="2026-08-01T00:00:00Z",
-        source_path="/fake/foo-main.jsonl",
-    )
-    _insert_recall_row(
-        con,
-        ex_id="ex-foo-feat",
-        conv_id="conv-foo-feat",
-        file_path="src/foo.py",
-        symbol_name="greet2",
-        git_branch="feat/33",
-        ts="2026-08-02T00:00:00Z",
-        source_path="/fake/foo-feat.jsonl",
-    )
-    _insert_recall_row(
-        con,
-        ex_id="ex-bar-main",
-        conv_id="conv-bar-main",
-        file_path="src/bar.py",
-        symbol_name="other",
-        git_branch="main",
-        ts="2026-08-03T00:00:00Z",
-        source_path="/fake/bar-main.jsonl",
-    )
-    con.close()
-
-    result = _invoke_recall(["--file", "src/foo.py", "--branch", "main", "--json"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    ids = {row["exchange_id"] for row in data}
-    assert ids == {"ex-foo-main"}
-
-
-def test_recall_json_shape_has_summaries_and_verbatim_ref(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _db, con = _setup(tmp_path)
-    _insert_recall_row(
-        con,
-        ex_id="ex1",
-        conv_id="conv1",
-        file_path="src/foo.py",
-        symbol_name="greet",
-        git_branch="main",
-        ts="2026-08-01T00:00:00Z",
-        ply_start=10,
-        core="core summary",
-        specific="specific detail",
-        source_path="/fake/session.jsonl",
-    )
-    con.close()
-
-    result = _invoke_recall(["--file", "src/foo.py", "--json"])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert len(data) >= 1
-    row = data[0]
-    assert "user_content" not in row
-    assert "agent_content" not in row
-    assert row["exchange_core"] == "core summary"
-    assert row["specific_context"] == "specific detail"
-    assert row["verbatim_ref"] == "/fake/session.jsonl:ply=10"
-    assert row["exchange_id"] == "ex1"
-
-
-def test_recall_no_file_or_branch_exits_1(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    _db, con = _setup(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="s-old", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-old", session_id="s-old", core="old work")
+    _insert_session(con, session_id="s-new", updated_at="2026-06-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-new", session_id="s-new", core="new work")
+    con.commit()
     con.close()
 
     result = _invoke_recall(["--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert [row["session_id"] for row in data] == ["s-new", "s-old"]
+    assert data[0]["score"] is None
+
+
+def test_recall_bare_text_output_sanitizes_git_branch(tmp_path, monkeypatch):
+    """session-log 由来の git_branch に terminal 制御シーケンスが含まれても、
+    text 出力ではそのまま echo しない(LOCI-CLI-001)"""
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(
+        con,
+        session_id="s-evil",
+        updated_at="2026-01-01T00:00:00+00:00",
+        git_branch_last="main\x1b[31mpwned",
+    )
+    _insert_exchange(con, exchange_id="e-evil", session_id="s-evil", core="work")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall([])
+
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "pwned" in result.output
+
+
+def test_recall_bare_no_sessions_reports_empty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path)[1].close()
+
+    result = _invoke_recall([])
+
+    assert result.exit_code == 0
+    assert "No sessions found" in result.output
+
+
+def test_recall_bare_excludes_sessions_without_exchanges(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="s-empty", updated_at="2026-06-01T00:00:00+00:00")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == []
+
+
+# ---- --file / --branch filters on list mode ----
+
+
+def test_recall_file_filter_restricts_session_list(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="s-foo", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-foo", session_id="s-foo", file_path="src/foo.py")
+    _insert_session(con, session_id="s-bar", updated_at="2026-02-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-bar", session_id="s-bar", file_path="src/bar.py")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--file", "src/foo.py", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert [row["session_id"] for row in data] == ["s-foo"]
+
+
+def test_recall_branch_filter_restricts_session_list(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(
+        con, session_id="s-main", updated_at="2026-01-01T00:00:00+00:00", git_branch_last="main"
+    )
+    _insert_exchange(con, exchange_id="e-main", session_id="s-main")
+    _insert_session(
+        con,
+        session_id="s-feat",
+        updated_at="2026-02-01T00:00:00+00:00",
+        git_branch_last="feat/gqa",
+    )
+    _insert_exchange(con, exchange_id="e-feat", session_id="s-feat")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--branch", "feat", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert [row["session_id"] for row in data] == ["s-feat"]
+
+
+def test_recall_file_outside_project_exits_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path)[1].close()
+
+    result = _invoke_recall(["--file", "/completely/outside/project/foo.py"])
+
     assert result.exit_code == 1
+    assert "outside the project" in result.output
 
 
-def test_recency_decay_reorders_tied_relevance():
-    """同一 RRF スコアなら、新しい timestamp の exchange が上に来る。"""
-    from lociaction.search import apply_recency_decay
-
-    def hit(eid: str) -> FusedResult:
-        return FusedResult(
-            exchange_id=eid,
-            user_content="u",
-            agent_content="a",
-            score=0.5,
-        )
-
-    now = datetime(2026, 9, 1, tzinfo=UTC)
-    out = apply_recency_decay(
-        [hit("old"), hit("new")],
-        timestamps={
-            "old": datetime(2024, 1, 1, tzinfo=UTC),
-            "new": datetime(2026, 8, 1, tzinfo=UTC),
-        },
-        half_life_days=14.0,
-        now=now,
-    )
-    assert [r.exchange_id for r in out] == ["new", "old"]
-    assert out[0].score > out[1].score
+# ---- keyword mode: relevance-ranked session list ----
 
 
-def test_search_combined_recency_reorders_tied_bm25(tmp_path: Path) -> None:
-    """同じ本文（同一 BM25 関連度）でも recency_half_life_days を渡すと新しい方が先。"""
-    from lociaction.search import search_combined
-
-    db_path = tmp_path / "memory.db"
-    init_db(db_path)
-    con = get_connection(db_path)
-    body = "connection pool " * 10
-    _insert_recall_row(
+def test_recall_keyword_ranks_sessions_by_relevance(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="s-gqa", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(
         con,
-        ex_id="old",
-        conv_id="conv-old",
-        file_path="src/pool.py",
-        symbol_name="old_fn",
-        git_branch="main",
-        ts="2020-01-01T00:00:00Z",
-        source_path="/fake/old.jsonl",
-        user_content=body,
-        agent_content=body,
+        exchange_id="e-gqa",
+        session_id="s-gqa",
+        user_content="grouped query attention implementation details " + LONG,
+        core="GQA implementation",
     )
-    _insert_recall_row(
+    _insert_exchange(
         con,
-        ex_id="new",
-        conv_id="conv-new",
-        file_path="src/pool.py",
-        symbol_name="new_fn",
-        git_branch="main",
-        ts="2026-08-01T00:00:00Z",
-        source_path="/fake/new.jsonl",
-        user_content=body,
-        agent_content=body,
+        exchange_id="e-gqa-2",
+        session_id="s-gqa",
+        ply_start=1,
+        user_content="follow up on attention heads " + LONG,
+        core="follow-up detail",
     )
-    # min_exchanges=2: 各会話にパディングを足す
-    for conv_id, ply in (("conv-old", 10), ("conv-new", 10)):
-        con.execute(
-            """INSERT OR IGNORE INTO exchanges
-               (id, conversation_id, ply_start, ply_end, user_content, agent_content)
-               VALUES (?,?,?,?,?,?)""",
-            (f"_pad_{conv_id}", conv_id, ply, ply + 1, "padding", "padding"),
+    _insert_session(con, session_id="s-unrelated", updated_at="2026-06-01T00:00:00+00:00")
+    _insert_exchange(
+        con,
+        exchange_id="e-unrelated",
+        session_id="s-unrelated",
+        user_content="totally unrelated chatter " + LONG,
+        core="unrelated chatter",
+    )
+    _insert_exchange(
+        con,
+        exchange_id="e-unrelated-2",
+        session_id="s-unrelated",
+        ply_start=1,
+        user_content="more unrelated chatter " + LONG,
+        core="more unrelated chatter",
+    )
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["grouped query attention", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    ids = [row["session_id"] for row in data]
+    assert "s-gqa" in ids
+    # 関連度順なので、より新しいだけの無関係セッションが先頭に来ない。
+    assert ids[0] == "s-gqa"
+    assert data[0]["score"] is not None
+
+
+def test_recall_keyword_no_match_reports_empty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path)[1].close()
+
+    result = _invoke_recall(["nonexistent keyword phrase"])
+
+    assert result.exit_code == 0
+    assert "No sessions found" in result.output
+
+
+# ---- --session digest ----
+
+
+def test_recall_session_digest_returns_ordered_lines(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="abcdef123456", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(
+        con, exchange_id="e-1", session_id="abcdef123456", ply_start=0, core="first decision"
+    )
+    _insert_exchange(
+        con, exchange_id="e-2", session_id="abcdef123456", ply_start=4, core="second decision"
+    )
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--session", "abcdef123456", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["summary"]["session_id"] == "abcdef123456"
+    assert [line["exchange_core"] for line in data["lines"]] == [
+        "first decision",
+        "second decision",
+    ]
+    assert data["total_exchanges"] == 2
+    assert data["truncated"] == 0
+    # 既定は全文を含まない（design: Tier 1）
+    assert "specific_context" not in data["lines"][0]
+    assert "user_content" not in data["lines"][0]
+
+
+def test_recall_session_digest_full_includes_verbatim(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="abcdef123456", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(
+        con,
+        exchange_id="e-1",
+        session_id="abcdef123456",
+        core="decision",
+        specific="specific detail",
+        user_content="verbatim user text",
+        agent_content="verbatim agent text",
+    )
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--session", "abcdef123456", "--full", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["lines"][0]["specific_context"] == "specific detail"
+    assert data["lines"][0]["user_content"] == "verbatim user text"
+    assert data["lines"][0]["agent_content"] == "verbatim agent text"
+
+
+def test_recall_session_prefix_match_resolves_uniquely(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="abcdef123456", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-1", session_id="abcdef123456", core="decision")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--session", "abcdef", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["summary"]["session_id"] == "abcdef123456"
+
+
+def test_recall_session_ambiguous_prefix_exits_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="abc111", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-1", session_id="abc111", core="decision")
+    _insert_session(con, session_id="abc222", updated_at="2026-01-01T00:00:00+00:00")
+    _insert_exchange(con, exchange_id="e-2", session_id="abc222", core="decision")
+    con.commit()
+    con.close()
+
+    result = _invoke_recall(["--session", "abc"])
+
+    assert result.exit_code == 1
+    assert "matches 2 sessions" in result.output
+
+
+def test_recall_session_unknown_exits_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path)[1].close()
+
+    result = _invoke_recall(["--session", "nonexistent"])
+
+    assert result.exit_code == 1
+    assert "no session matches" in result.output
+
+
+def test_recall_session_digest_truncates_with_limit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_session(con, session_id="abcdef123456", updated_at="2026-01-01T00:00:00+00:00")
+    for i in range(5):
+        _insert_exchange(
+            con, exchange_id=f"e-{i}", session_id="abcdef123456", ply_start=i, core=f"decision {i}"
         )
     con.commit()
     con.close()
 
-    vec = np.ones(384, dtype=np.float32)
-    results = search_combined(
-        db_path,
-        "connection pool",
-        vec,
-        limit=5,
-        recency_half_life_days=14.0,
-    )
-    ids = [r.exchange_id for r in results]
-    assert "new" in ids and "old" in ids
-    assert ids.index("new") < ids.index("old")
-    new_score = next(r.score for r in results if r.exchange_id == "new")
-    old_score = next(r.score for r in results if r.exchange_id == "old")
-    assert new_score > old_score
+    result = _invoke_recall(["--session", "abcdef123456", "--limit", "2", "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["lines"]) == 2
+    assert data["total_exchanges"] == 5
+    assert data["truncated"] == 3
 
 
-def test_search_combined_default_does_not_require_recency(tmp_path: Path) -> None:
-    """既存 search()/context() 呼び出しは recency 引数なしで動く。"""
-    from lociaction.search import search_combined
+# ---- mutually exclusive query + --session ----
 
-    db_path = tmp_path / "memory.db"
-    init_db(db_path)
-    vec = np.ones(384, dtype=np.float32)
-    assert search_combined(db_path, "query", vec, limit=5) == []
+
+def test_recall_query_and_session_together_exits_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _setup(tmp_path)[1].close()
+
+    result = _invoke_recall(["some query", "--session", "abc"])
+
+    assert result.exit_code == 1
+    assert "cannot be combined" in result.output

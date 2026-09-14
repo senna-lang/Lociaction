@@ -1,6 +1,7 @@
 """共通ユーティリティ: プロジェクト横断で再利用される小さなヘルパー関数"""
 
 import hashlib
+import re
 
 
 def sha256(text: str) -> str:
@@ -22,3 +23,18 @@ def escape_like(value: str, escape_char: str = "\\") -> str:
     escaped = escaped.replace("%", escape_char + "%")
     escaped = escaped.replace("_", escape_char + "_")
     return escaped
+
+
+_TERMINAL_CONTROL_RE = re.compile(
+    r"\x1b(?:[@-Z\\-_]"
+    r"|\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\)?)"
+    r"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]"
+)
+
+
+def sanitize_terminal_text(text: str | None) -> str:
+    """DB 由来の平文を terminal に出す前に CSI/OSC/C0/C1 制御を落とす。"""
+    if not text:
+        return ""
+    return _TERMINAL_CONTROL_RE.sub("", text)

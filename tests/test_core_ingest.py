@@ -72,6 +72,49 @@ def test_ingest_persists_provenance_cursor_and_files(tmp_path: Path) -> None:
     assert [row[0] for row in files] == ["src/lociaction/core/ingest.py"]
 
 
+
+def test_ingest_persists_only_canonical_safe_exchange_files(tmp_path: Path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    project_root = tmp_path / "project"
+    source_file = project_root / "src" / "target.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("value = 1\n")
+    external_file = tmp_path / "outside.py"
+    external_file.write_text("secret = True\n")
+    (project_root / "linked.py").symlink_to(external_file)
+    session = CanonicalSession(
+        harness="codex",
+        source_session_id="session-1",
+        primary_ref="/tmp/rollout.jsonl",
+        project_key=str(project_root),
+    )
+    result = ParseResult(
+        exchanges=(
+            CanonicalExchange(
+                harness="codex",
+                session_ref="/tmp/rollout.jsonl#ply=2-4",
+                source_session_id="session-1",
+                source_turn_id="turn-2",
+                ply_start=2,
+                ply_end=4,
+                user_content="update target",
+                agent_content="updated target",
+                files_touched=("src/./target.py", "../outside.py", "linked.py"),
+            ),
+        ),
+        next_cursor="v1:ply:4",
+    )
+
+    con = get_connection(db_path)
+    assert ingest_parse_result(con, session, result) == 1
+    con.commit()
+    files = con.execute("SELECT file_path FROM exchange_files").fetchall()
+    con.close()
+
+    assert [row[0] for row in files] == ["src/target.py"]
+
+
 def test_ingest_persists_parent_session_ref_on_new_conversation(tmp_path: Path) -> None:
     """design §2.3・§4.2: CanonicalSession.parent_session_ref を conversations に書き込む"""
     db_path = tmp_path / "memory.db"

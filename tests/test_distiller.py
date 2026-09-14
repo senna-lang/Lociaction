@@ -433,8 +433,8 @@ def test_save_palace_object_resolves_relative_path_against_project_root(
     resolver.extract.assert_called_once_with(Path("/home/user/myproject/src/foo.py"))
 
 
-def test_save_palace_object_keeps_absolute_path_with_project_root(tmp_path) -> None:
-    """files_touched が既に絶対パスの場合は project_root を連結しない"""
+def test_save_palace_object_skips_absolute_path_outside_project_root(tmp_path) -> None:
+    """プロジェクト外の絶対パスは resolver に渡さず読み取らない"""
     db_path = tmp_path / "memory.db"
     init_db(db_path)
     _make_exchange(db_path, "ex1")
@@ -457,7 +457,38 @@ def test_save_palace_object_keeps_absolute_path_with_project_root(tmp_path) -> N
         project_root="/home/user/myproject",
     )
 
-    resolver.extract.assert_called_once_with(Path("/other/abs/foo.py"))
+    resolver.extract.assert_not_called()
+
+
+def test_save_palace_object_reads_in_project_absolute_path(tmp_path) -> None:
+    """プロジェクト内の絶対パスは相対パスへ正規化してから抽出する"""
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1")
+    src = tmp_path / "src"
+    src.mkdir()
+    target = src / "foo.py"
+    target.write_text("def greet():\n    return 1\n")
+
+    resolver = MagicMock()
+    resolver.extract.return_value = []
+
+    palace = PalaceObject(
+        exchange_core="c",
+        specific_context="s",
+        room_assignments=[],
+        files_touched=[str(target)],
+    )
+    save_palace_object(
+        db_path,
+        "ex1",
+        palace,
+        np.zeros(384, dtype=np.float32),
+        resolver=resolver,
+        project_root=str(tmp_path),
+    )
+
+    resolver.extract.assert_called_once_with(tmp_path / "src" / "foo.py")
 
 
 def test_save_palace_object_single_char_symbol_requires_word_boundary(

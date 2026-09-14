@@ -27,6 +27,11 @@ from lociaction.models import CodeLocator, CodeTouch, FileOnly, TextAnchor
 # title でツールを識別する。値は touch_kind への対応表そのもの。
 _EDIT_TOOL_KINDS: dict[str, str] = {"write": "write", "search_replace": "edit"}
 
+# 1 exchange に許容する distinct edit tool call の最大数。Grok session は未信頼
+# 入力であり、各 touch は後段で DB・git・symbol-resolution の作業を発生させる。
+# 上限を超えた exchange の touch は全て破棄する（LOCI-GROK-TOUCH-FANOUT-01）。
+MAX_EDIT_CALLS_PER_EXCHANGE = 4_096
+
 
 @dataclass
 class _CallState:
@@ -51,9 +56,15 @@ def edit_capability() -> str:
 
 
 def extract_code_touches(raw_entries: list[dict[str, Any] | None]) -> list[CodeTouch]:
-    """完了した write/search_replace を、toolCallId ごとに1件の編集記録として返す。"""
-    calls = _collect_calls(raw_entries)
+    """完了した write/search_replace を、toolCallId ごとに1件の編集記録として返す。
 
+    distinct edit call が上限を超えた未信頼 exchange は、部分的な touch 集合を
+    返さず空集合として扱う。後続の resource amplification を防ぎ、後半にある
+    path だけを不完全に policy 評価することも避ける。
+    """
+    calls = _collect_calls(raw_entries)
+    if calls is None:
+        return []
     touches: list[CodeTouch] = []
     for call_id, state in sorted(calls.items(), key=lambda item: item[1].order):
         # 適用されなかった編集は記録しない（間違ったひも付けより空が良い — §3.3）
@@ -92,8 +103,12 @@ def extract_code_touches(raw_entries: list[dict[str, Any] | None]) -> list[CodeT
 
 def _collect_calls(
     raw_entries: list[dict[str, Any] | None],
-) -> dict[str, _CallState]:
-    """tool_call と後続の tool_call_update を toolCallId ごとに1件へ畳み込む。"""
+) -> dict[str, _CallState] | None:
+    """tool_call と後続の tool_call_update を toolCallId ごとに1件へ畳み込む。
+
+    上限を超える distinct edit call が現れた場合は None を返し、呼び出し側が
+    exchange 全体の touch を fail-closed で破棄する。
+    """
     calls: dict[str, _CallState] = {}
 
     for order, entry in enumerate(raw_entries):
@@ -113,6 +128,8 @@ def _collect_calls(
             if touch_kind is None:
                 # tool_call_update しか届かない編集は無い（実測）。編集以外はここで捨てる
                 continue
+            if len(calls) >= MAX_EDIT_CALLS_PER_EXCHANGE:
+                return None
             state = _CallState(
                 touch_kind=touch_kind,
                 ts=_normalize_ts(entry.get("timestamp") if isinstance(entry, dict) else None),
@@ -179,7 +196,10 @@ def _normalize_ts(timestamp: Any) -> str | None:
     if isinstance(timestamp, str) and timestamp:
         return timestamp
     if isinstance(timestamp, int | float) and not isinstance(timestamp, bool):
-        return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+        try:
+            return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
     return None
 
 

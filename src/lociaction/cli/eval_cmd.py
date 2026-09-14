@@ -32,12 +32,12 @@ _SUPPORTED_DATASETS = ("symbol-recall",)
 @eval_app.command("gen")
 def eval_gen(
     dataset: Annotated[
-        str, typer.Option("--dataset", help="生成するデータセット名")
+        str, typer.Option("--dataset", help="Dataset name to generate")
     ] = "symbol-recall",
     min_gold: Annotated[int, typer.Option("--min-gold")] = 1,
     max_gold: Annotated[int, typer.Option("--max-gold")] = 20,
 ) -> None:
-    """symbol-recall データセットを実 DB + git 履歴から生成する。"""
+    """Generate the symbol-recall dataset from the project DB and git history."""
     if dataset not in _SUPPORTED_DATASETS:
         typer.echo(
             f"Unsupported dataset: {dataset}. Choose one of: {', '.join(_SUPPORTED_DATASETS)}.",
@@ -53,8 +53,9 @@ def eval_gen(
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     con = get_connection(db)
     try:
@@ -78,14 +79,12 @@ def _load_adapters(db):
 @eval_app.command("run")
 def eval_run(
     dataset: Annotated[str, typer.Option("--dataset")] = "symbol-recall",
-    adapter: Annotated[
-        str, typer.Option("--adapter", help="all または symbol")
-    ] = "all",
+    adapter: Annotated[str, typer.Option("--adapter", help="all or symbol")] = "all",
     k: Annotated[int, typer.Option("--k")] = _DEFAULT_K,
     seed: Annotated[int, typer.Option("--seed")] = _DEFAULT_SEED,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """dataset × adapter を実行し Recall@k / MRR@10 を表示する。"""
+    """Run a dataset × adapter pair and print Recall@k / MRR@10."""
     from lociaction.eval.datasets.schema import dataset_path, load_dataset
     from lociaction.eval.report import render_json, render_markdown, score_runs
     from lociaction.eval.runner import corpus_stats, run_adapters
@@ -94,8 +93,9 @@ def eval_run(
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     ds_path = dataset_path(dataset)
     if not ds_path.exists():
@@ -134,7 +134,7 @@ def eval_report(
     k: Annotated[int, typer.Option("--k")] = _DEFAULT_K,
     seed: Annotated[int, typer.Option("--seed")] = _DEFAULT_SEED,
 ) -> None:
-    """`loci eval run --adapter all` の md レポート表示（別名）。"""
+    """Render `loci eval run --adapter all` as markdown."""
     eval_run(dataset=dataset, adapter="all", k=k, seed=seed, json_output=False)
 
 
@@ -168,7 +168,7 @@ def eval_gate(
         ),
     ] = None,
 ) -> None:
-    """合成 fixture で symbol-recall を回し、committed baseline と比較する。"""
+    """Run symbol-recall on the synthetic fixture and compare to a committed baseline."""
 
     from lociaction.eval.fixture import FIXTURE_QUERIES, build_symbol_recall_fixture
     from lociaction.eval.gate import compare_to_baseline, load_baseline
@@ -204,4 +204,3 @@ def eval_gate(
         )
     if result.failed:
         raise typer.Exit(1)
-

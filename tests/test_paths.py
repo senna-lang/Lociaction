@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from lociaction.paths import find_project_root
+import pytest
+
+from lociaction.paths import db_path, find_project_root
 
 
 def _mock_git_root(monkeypatch, root):
@@ -24,6 +27,15 @@ def test_find_project_root_uses_cwd_when_initialized(tmp_path, monkeypatch, caps
     assert root == tmp_path
     assert "parent directory" not in captured.err
 
+
+def test_db_path_rejects_symlinked_lociaction_directory(tmp_path: Path) -> None:
+    """プロジェクト状態をリポジトリ外へ redirect する symlink を拒否する。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / ".lociaction").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        db_path(tmp_path)
 
 def test_find_project_root_walks_to_parent_with_notice(tmp_path, monkeypatch, capsys):
     """サブディレクトリで実行時、親の .lociaction/ を拾った場合は stderr に通知"""
@@ -197,7 +209,9 @@ def test_resolve_claude_projects_path_folds_non_alnum_like_claude_does(
     encoded_name = re.sub(r"[^a-zA-Z0-9]", "-", str(project_root))
     session_dir = claude_projects / encoded_name
     session_dir.mkdir(parents=True)
-    (session_dir / "session.jsonl").write_text("{}\n")
+    (session_dir / "session.jsonl").write_text(
+        json.dumps({"cwd": str(project_root)}) + "\n"
+    )
 
     monkeypatch.setattr("lociaction.paths.CLAUDE_PROJECTS_DIR", claude_projects)
 
@@ -207,6 +221,268 @@ def test_resolve_claude_projects_path_folds_non_alnum_like_claude_does(
     naive_encoded_name = str(project_root).replace("/", "-")
     assert naive_encoded_name != encoded_name
 
+
+def test_resolve_claude_projects_path_rejects_colliding_foreign_session_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """slug 衝突した候補でも、記録済み cwd が別 root のログは採用しない。"""
+    import re
+
+    from lociaction.paths import resolve_claude_projects_path
+
+    project_root = tmp_path / "work" / "a-b"
+    foreign_root = tmp_path / "work" / "a" / "b"
+    project_root.mkdir(parents=True)
+    foreign_root.mkdir(parents=True)
+    session_dir = tmp_path / "claude_projects" / re.sub(
+        r"[^a-zA-Z0-9]", "-", str(project_root)
+    )
+    session_dir.mkdir(parents=True)
+    (session_dir / "foreign.jsonl").write_text(
+        json.dumps({"cwd": str(foreign_root)}) + "\n"
+    )
+    monkeypatch.setattr("lociaction.paths.CLAUDE_PROJECTS_DIR", session_dir.parent)
+
+    assert resolve_claude_projects_path(project_root) is None
+
+
+def test_resolve_omp_sessions_path_rejects_colliding_foreign_session_dir(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """OMP の slug 衝突でも session envelope の cwd と一致しなければ採用しない。"""
+    from lociaction.paths import resolve_omp_pi_sessions_path
+
+    home = tmp_path / "home"
+    project_root = home / "work" / "a-b"
+    foreign_root = home / "work" / "a" / "b"
+    project_root.mkdir(parents=True)
+    foreign_root.mkdir(parents=True)
+    session_dir = home / ".omp" / "agent" / "sessions" / "-work-a-b"
+    session_dir.mkdir(parents=True)
+    (session_dir / "foreign.jsonl").write_text(
+        json.dumps({"type": "session", "cwd": str(foreign_root)}) + "\n"
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+    assert resolve_omp_pi_sessions_path(project_root) is None
+
+
+def test_session_file_matches_project_root_bounds_oversized_line_reads(
+    tmp_path: Path,
+) -> None:
+    """改行の無い巨大な1行があっても、読み取りは1行あたりの上限で打ち切る
+    (LOCI-SESSION-READLINE-UNBOUNDED)。"""
+    from lociaction.paths import (
+        MAX_SESSION_METADATA_LINE_BYTES,
+        session_file_matches_project_root,
+    )
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_path = tmp_path / "huge.jsonl"
+    oversized_line = "x" * (MAX_SESSION_METADATA_LINE_BYTES * 40)
+    session_path.write_text(oversized_line)
+
+    assert session_file_matches_project_root(session_path, project_root) is False
+
+
+def test_session_file_matches_project_root_finds_cwd_after_oversized_line(
+    tmp_path: Path,
+) -> None:
+    """打ち切られた巨大行の直後に正しい cwd 行があれば、それは検出できる。"""
+    from lociaction.paths import (
+        MAX_SESSION_METADATA_LINE_BYTES,
+        session_file_matches_project_root,
+    )
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_path = tmp_path / "session.jsonl"
+    oversized_line = "x" * (MAX_SESSION_METADATA_LINE_BYTES * 2)
+    session_path.write_text(
+        oversized_line + "\n" + json.dumps({"cwd": str(project_root)}) + "\n"
+    )
+
+    assert session_file_matches_project_root(session_path, project_root) is True
+
+
+def test_session_file_matches_project_root_skips_fifo_without_blocking(
+    tmp_path: Path,
+) -> None:
+    """FIFO を仕込まれても open() でブロックせず、即座に非一致として扱う
+    (LOCI-PATHS-SESSIONOPEN-BLOCK-01)。"""
+    import os as os_module
+
+    from lociaction.paths import session_file_matches_project_root
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    fifo_path = tmp_path / "planted.jsonl"
+    os_module.mkfifo(fifo_path)
+
+    assert session_file_matches_project_root(fifo_path, project_root) is False
+
+
+def test_session_file_matches_project_root_rejects_fifo_swapped_after_stat(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """stat 後に FIFO へ差し替えられても、descriptor の fstat が検出して
+    block せず非一致にする（LOCI-PATHS-SESSION-STAT-OPEN-TOCTOU-01）。"""
+    import os as os_module
+
+    import lociaction.paths as paths_mod
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    regular_file = tmp_path / "regular.jsonl"
+    regular_file.write_text("{}\n")
+    fifo_path = tmp_path / "swapped.jsonl"
+    os_module.mkfifo(fifo_path)
+    regular_stat = regular_file.stat()
+    original_stat = Path.stat
+
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self: regular_stat if self == fifo_path else original_stat(self),
+    )
+
+    assert paths_mod.session_file_matches_project_root(fifo_path, project_root) is False
+
+
+def test_session_file_matches_project_root_skips_deeply_nested_json(
+    tmp_path: Path,
+) -> None:
+    """小さくても深くネストした JSON metadata で session discovery を落とさない
+    （LOCI-PATHS-SESSION-JSON-NESTING-DOS）。"""
+    from lociaction.paths import session_file_matches_project_root
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_path = tmp_path / "nested.jsonl"
+    session_path.write_text("[" * 4_000 + "]" * 4_000 + "\n")
+
+    assert session_file_matches_project_root(session_path, project_root) is False
+
+
+def test_session_file_matches_project_root_skips_symlink_loop_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """attacker-controlled cwd の path resolution が失敗しても session discovery を
+    止めず、非一致として扱う（CWE-248）。"""
+    from lociaction.paths import session_file_matches_project_root
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop.name)
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_text(json.dumps({"cwd": str(loop)}) + "\n")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda self: (
+            (_ for _ in ()).throw(RuntimeError("Symlink loop"))
+            if self == loop
+            else original_resolve(self)
+        ),
+    )
+
+    assert session_file_matches_project_root(session_path, project_root) is False
+
+
+def test_resolve_opencode_db_path_rejects_fifo_and_symlink(tmp_path: Path, monkeypatch) -> None:
+    """fixed OpenCode DB path が FIFO/symlink なら SQLite へ渡さない
+    （LOCI-PATHS-OPENCODE-DB-SPECIALFILE-01）。"""
+    import os as os_module
+
+    import lociaction.paths as paths_mod
+
+    db_dir = tmp_path / ".local" / "share" / "opencode"
+    db_dir.mkdir(parents=True)
+    db_path = db_dir / "opencode.db"
+    os_module.mkfifo(db_path)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert paths_mod.resolve_opencode_db_path() is None
+
+    db_path.unlink()
+    target = tmp_path / "outside.db"
+    target.write_text("not a database")
+    db_path.symlink_to(target)
+
+    assert paths_mod.resolve_opencode_db_path() is None
+
+
+def test_session_files_for_project_filters_via_bounded_rglob(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """session_files_for_project は `_bounded_rglob` が返した候補だけを検証する
+    （実際のエントリ数上限は `_bounded_rglob` 自体が担う。
+    LOCI-PATHS-SESSIONSCAN-TREEWALK-UNBOUNDED）。"""
+    import lociaction.paths as paths_mod
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+
+    decoy = session_dir / "decoy.jsonl"
+    decoy.write_text("{}\n")
+    matching = session_dir / "matching.jsonl"
+    matching.write_text(json.dumps({"cwd": str(project_root)}) + "\n")
+
+    # _bounded_rglob が decoy しか返さない（cap に達して matching へ届かなかった
+    # 状況を模す）場合、呼び出し側はそれ以上を探しに行かない。
+    monkeypatch.setattr(
+        paths_mod, "_bounded_rglob", lambda directory, pattern: iter((decoy,))
+    )
+
+    result = paths_mod.session_files_for_project(session_dir, project_root)
+
+    assert result == []
+
+
+def test_has_project_session_filters_via_bounded_rglob(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """_has_project_session も `_bounded_rglob` が返した候補だけを検証する。"""
+    import lociaction.paths as paths_mod
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+
+    decoy = session_dir / "decoy.jsonl"
+    decoy.write_text("{}\n")
+
+    monkeypatch.setattr(
+        paths_mod, "_bounded_rglob", lambda directory, pattern: iter((decoy,))
+    )
+
+    assert paths_mod._has_project_session(session_dir, project_root) is False
+
+
+def test_bounded_rglob_caps_total_entries_visited_not_just_matches(
+    tmp_path: Path,
+) -> None:
+    """マッチがほとんど無い巨大なツリーでも、訪問エントリ総数の上限で打ち切る
+    （マッチ数だけを絞る itertools.islice ではこのケースを防げなかった。
+    LOCI-PATHS-SESSIONSCAN-TREEWALK-UNBOUNDED）。"""
+    import lociaction.paths as paths_mod
+
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    # cap を大きく超える数の非マッチ空ディレクトリを作る。
+    for i in range(50):
+        (session_dir / f"empty-{i}").mkdir()
+    # マッチするファイルは無い。
+
+    results = list(paths_mod._bounded_rglob(session_dir, "*.jsonl", max_entries=10))
+
+    assert results == []
 
 def test_loci_bin_prefers_venv_binary_when_present(
     tmp_path: Path, monkeypatch

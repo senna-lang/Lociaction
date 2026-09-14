@@ -26,6 +26,7 @@ from lociaction.paths import (
     resolve_codex_sessions_path,
     resolve_grok_sessions_path,
     resolve_omp_pi_sessions_path,
+    session_file_matches_project_root,
 )
 
 
@@ -42,6 +43,8 @@ def detected_jsonl_sources() -> tuple[JsonlLogSource, ...]:
             parse_exchanges,
             touch_adapter=claude_adapter,
             parent_ref_resolver=claude_adapter.parent_session_ref,
+            session_path_validator=session_file_matches_project_root,
+
         ),
         JsonlLogSource(
             "codex",
@@ -55,6 +58,7 @@ def detected_jsonl_sources() -> tuple[JsonlLogSource, ...]:
             resolve_omp_pi_sessions_path,
             parse_omp_pi_exchanges,
             touch_adapter=omp_pi_adapter,
+            session_path_validator=session_file_matches_project_root,
         ),
         JsonlLogSource(
             "grok",

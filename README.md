@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
-An AI coding agent recalls everything it has done through two recall primitives — `loci search` and `loci context` — plus `loci recall`, a session-start convenience command that fuses both. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
+An AI coding agent recalls everything it has done through two recall primitives — `loci search` and `loci context` — plus `loci recall`, a resume-style browser over past sessions. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
 
 The CLI command `loci` is designed to be **called by the agent itself** — running `loci search "..." --json` from within a prompt. *(The name comes from the [Method of Loci](https://en.wikipedia.org/wiki/Method_of_loci) — the memory-palace technique. Under the hood, conversations are distilled into "palace objects"; see [How It Works](#how-it-works). The architecture extends the conversational memory model from [arXiv:2603.13017](https://arxiv.org/abs/2603.13017) for coding agents.)*
 
@@ -20,13 +20,25 @@ The recall interface is built from two primitives, plus one composite:
 - **`loci context`** — reverse lookup, by code symbol (`--symbol "name"`) or git branch (`--branch "name"`)
   - tree-sitter symbol resolution (Python / TypeScript / Go / Rust / Java / C# / Ruby) lets agents understand implementation intent before editing
   - `--branch "name"` recalls what was done and discussed on a specific git branch (also available as `loci search "query" --branch "name"`)
-- **`loci recall --file PATH --branch NAME`** — session-start warmup: merges `context` + `search`, recency-ranked, with `--file`/`--branch` combinable as AND filters
+- **`loci recall`** — resume-style session browser: bare for the newest sessions, with a keyword query to rank sessions by relevance instead of recency, `--session ID` for one session's one-line-per-exchange digest; `--file`/`--branch` filter either mode
 
 That's deliberate. The user here is the agent, and an agent handed a 50-tool palette hesitates, mis-picks, and burns tokens just deciding which to call. With a surface this small — and no MCP tool schemas sitting resident in the context window — the agent reaches for the right call the first time, every time. *(When the full transcript is needed, `loci show "<exchange-id>"` expands a search result to its stored verbatim source.)*
 
+<p align="center">
+  <img src="assets/demo-search.svg" alt="loci search recalling a past design decision with its symbol, file:line, and git branch" width="640">
+</p>
+
 Touching a symbol means recalling what was decided about it — `loci context` reverse-looks-up the exact code location, signature, and the conversation behind it.
 
+<p align="center">
+  <img src="assets/demo-context.svg" alt="loci context reverse-looking-up a symbol to the conversation that shaped it" width="640">
+</p>
+
 ## How It Works
+
+<p align="center">
+  <img src="assets/how-it-works.svg" alt="session logs are indexed into exchanges, distilled into palace objects with symbols, then recalled via BM25 + HNSW fused by RRF" width="100%">
+</p>
 
 1. **Index** — Splits agent session logs into exchanges (user utterance + agent response pairs) and indexes them with FTS5 for keyword search
 2. **Distill** — The configured distill client (default `claude --print` with `claude-haiku-4-5`; see [Configuration](#configuration) for the other five CLI backends and local-model options) summarizes each exchange into a palace object: `exchange_core` (what was done), `specific_context` (concrete details), `room_assignments` (topic tags). tree-sitter resolves touched files to symbol level (function/class/method + file + line + signature)
@@ -79,6 +91,7 @@ Invalid input on any prompt re-prompts instead of silently falling back to a def
 
 | Command | Description |
 |---------|-------------|
+| `loci docs list` / `loci docs show <name>` | Version-matched documentation shipped with this install (no project or network required) |
 | `loci init [--distill-client ID]` | Initialize `.lociaction/`, write common `AGENTS.md` instructions, and install Claude hooks (`--no-hooks` to skip, `--no-local-distiller` to skip the Ollama pull offer, `--distill-client` to pick the distill client non-interactively) |
 | `loci index [--harness all\|claude\|codex\|opencode\|omp-pi\|grok]` | Index new session logs; the default indexes every detected harness |
 | `loci distill [--limit N] [--setup]` | Distill undistilled exchanges via the configured client; `--setup` re-runs discover/select and saves the choice |
@@ -86,13 +99,16 @@ Invalid input on any prompt re-prompts instead of silently falling back to a def
 | `loci search "query" --json` | Semantic search (agent-facing); add `--branch NAME` to filter by git branch |
 | `loci context --symbol "name" --json` | Code symbol → past conversations (lightweight; add `--full` for verbatim text) |
 | `loci context --branch "name" --json` | Git branch → past conversations (includes undistilled exchanges) |
-| `loci recall --file PATH --branch NAME --json` | Session-start warmup: merge context+search, recency-ranked; `--file`/`--branch` AND-combinable |
+| `loci recall ["query"] [--session ID] --json` | Resume: session list (newest or relevance-ranked) or one session's digest; `--file`/`--branch` filter either mode |
 | `loci show "<exchange-id>" --json` | Retrieve a stored exchange by its primary ID |
 | `loci status` | Show index state |
 | `loci prime` | Inject command usage into the session context |
 | `loci server start/stop/status` | Embedding server management |
 | `loci hook install --harness NAME` | Install native lifecycle hooks for one of the five supported harnesses |
 | `loci hook uninstall --harness NAME` | Remove native lociaction lifecycle hooks |
+
+Installed documentation is the source of truth for setup, recall, harnesses, distillation, troubleshooting, and privacy. Prefer `loci docs show <name>` over web pages so the text matches this exact version. The Markdown sources live in [`src/lociaction/docs/`](src/lociaction/docs/).
+
 
 ## Harness Lifecycle
 

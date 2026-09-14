@@ -8,7 +8,12 @@ from pathlib import Path
 from lociaction.core.ingest import ingest_parse_result
 from lociaction.core.models import CanonicalExchange, CanonicalSession, ParseResult
 from lociaction.db import get_connection, init_db
-from lociaction.indexer import index_file, parse_exchanges
+from lociaction.indexer import (
+    _load_incremental_raw_entries,
+    _load_raw_entries,
+    index_file,
+    parse_exchanges,
+)
 from lociaction.utils import sha256
 
 # ---- フィクスチャ ----
@@ -648,6 +653,63 @@ def test_parse_exchanges_tool_use_dedup(tmp_path: Path) -> None:
     assert len(exchanges[0].files) == 1
 
 
+def test_parse_exchanges_captures_file_path_from_unrecognized_tool(tmp_path: Path) -> None:
+    """未認識ツールでも明示的な file_path は exchange.files に含まれる"""
+    f = tmp_path / "session.jsonl"
+    write_jsonl(
+        f,
+        [
+            make_user_entry("u1", "Update the source file please. " * 10),
+            make_assistant_entry_with_tool_use(
+                "a1", "src/custom.py", "u1", tool_name="CustomEditor"
+            ),
+        ],
+    )
+
+    exchanges = parse_exchanges(f)
+
+    assert exchanges[0].files == ["src/custom.py"]
+
+
+def test_parse_exchanges_prefers_notebook_path_from_tool_input(tmp_path: Path) -> None:
+    """notebook_path と file_path があれば notebook_path を優先する"""
+    f = tmp_path / "session.jsonl"
+    entry = make_assistant_entry_with_tool_use("a1", "notebooks/analysis.ipynb", "u1")
+    entry["message"]["content"][0]["input"] = {
+        "file_path": "src/incorrect.py",
+        "notebook_path": "notebooks/analysis.ipynb",
+    }
+    write_jsonl(
+        f,
+        [
+            make_user_entry("u1", "Update the notebook please. " * 10),
+            entry,
+        ],
+    )
+
+    exchanges = parse_exchanges(f)
+
+    assert exchanges[0].files == ["notebooks/analysis.ipynb"]
+
+
+def test_parse_exchanges_ignores_shell_command_without_explicit_path(tmp_path: Path) -> None:
+    """shell コマンド文字列は明示的なファイル参照として扱わない"""
+    f = tmp_path / "session.jsonl"
+    entry = make_assistant_entry_with_tool_use("a1", "placeholder", "u1", tool_name="Bash")
+    entry["message"]["content"][0]["input"] = {"command": "cat secrets/api_key.txt"}
+    write_jsonl(
+        f,
+        [
+            make_user_entry("u1", "Inspect the shell command please. " * 10),
+            entry,
+        ],
+    )
+
+    exchanges = parse_exchanges(f)
+
+    assert exchanges[0].files == []
+
+
 def test_parse_exchanges_tool_use_excludes_external(tmp_path: Path) -> None:
     """外部パス（.venv など）は除外される"""
     f = tmp_path / "session.jsonl"
@@ -996,6 +1058,47 @@ def test_index_file_writes_code_edges_file_granularity_for_unsupported_language(
     assert edges[0]["confidence"] == 0.5
 
 
+def test_live_symbol_resolution_uses_project_root_not_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """`_resolve_symbols_at` の live フォールバックは project_root/rel_path を
+    読む——プロセスの CWD が project_root と異なっていても、CWD 相対の
+    無関係なファイルを読んではならない(LOCI-INGEST-CWD-PATH-001)"""
+    project_root = tmp_path / "repo"
+    src_dir = project_root / "src"
+    src_dir.mkdir(parents=True)
+    (src_dir / "foo.py").write_text("def real_symbol():\n    pass\n")
+
+    decoy_cwd = tmp_path / "elsewhere"
+    (decoy_cwd / "src").mkdir(parents=True)
+    (decoy_cwd / "src" / "foo.py").write_text("def decoy_symbol():\n    pass\n")
+
+    db_path = project_root / ".lociaction" / "memory.db"
+    init_db(db_path)
+
+    jsonl = project_root / "session.jsonl"
+    write_jsonl(
+        jsonl,
+        [
+            make_user_entry("u1", "Fix the bug in foo.py please. " * 10),
+            *make_edit_tool_use_and_result("toolu_1", "src/foo.py", "u1"),
+        ],
+    )
+
+    monkeypatch.chdir(decoy_cwd)
+    index_file(jsonl, db_path, project_root=project_root)
+
+    con = get_connection(db_path)
+    names = {
+        row["symbol_name"]
+        for row in con.execute("SELECT symbol_name FROM code_symbols").fetchall()
+    }
+    con.close()
+
+    assert "real_symbol" in names
+    assert "decoy_symbol" not in names
+
+
 def test_index_file_every_code_touch_has_at_least_one_code_edge(tmp_path: Path) -> None:
     """design §8.1 不変条件1: 編集記録1件からは必ず1本以上のひも付けができる。
 
@@ -1084,3 +1187,53 @@ def test_index_file_code_edges_added_accumulates_across_touches_on_same_symbol(
 
     assert len(edges) == 1
     assert edges[0]["added"] == touch_added_total
+
+
+def test_load_raw_entries_skips_invalid_utf8_line(tmp_path: Path) -> None:
+    """不正な UTF-8 バイト列は json.loads 内部で UnicodeDecodeError
+    (ValueError のサブクラス)を投げる。json.JSONDecodeError だけを
+    捕まえていると index 全体が落ちる(loci-jsonl-uncaught-valueerror-dos)。"""
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_bytes(b'{"ok":1}\n\xff\xfe not valid utf-8\n{"ok":2}\n')
+    entries = _load_raw_entries(jsonl, last_ply_end=-1)
+    assert entries == [{"ok": 1}, {"ok": 2}]
+
+
+def test_load_incremental_raw_entries_skips_invalid_utf8_line(tmp_path: Path) -> None:
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_bytes(b'{"ok":1}\n\xff\xfe not valid utf-8\n{"ok":2}\n')
+    chunk = _load_incremental_raw_entries(jsonl, 0, 0)
+    assert chunk.entries == [{"ok": 1}, {"ok": 2}]
+
+
+def test_load_raw_entries_skips_oversized_line(tmp_path: Path, monkeypatch) -> None:
+    import lociaction.indexer as indexer
+
+    monkeypatch.setattr(indexer, "JSONL_MAX_LINE_BYTES", 8)
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_bytes(b'{"ok":1}\n' + b"x" * 20 + b"\n" + b'{"ok":2}\n')
+    entries = _load_raw_entries(jsonl, last_ply_end=-1)
+    assert len(entries) == 1
+
+
+def test_load_raw_entries_stops_at_entry_limit(tmp_path: Path, monkeypatch) -> None:
+    import lociaction.indexer as indexer
+
+    monkeypatch.setattr(indexer, "JSONL_MAX_ENTRIES", 2)
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_text('{"a":1}\n{"b":2}\n{"c":3}\n')
+    entries = _load_raw_entries(jsonl, last_ply_end=-1)
+    assert len(entries) == 2
+
+
+def test_load_incremental_raw_entries_stops_at_total_bytes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import lociaction.indexer as indexer
+
+    monkeypatch.setattr(indexer, "JSONL_MAX_TOTAL_BYTES", 10)
+    jsonl = tmp_path / "session.jsonl"
+    jsonl.write_bytes(b'{"a":1}\n{"bbbbbbbb":2}\n')
+    chunk = _load_incremental_raw_entries(jsonl, 0, 0)
+    assert len(chunk.entries) == 1
+    assert len(chunk.end_offsets) == 1

@@ -13,7 +13,11 @@ import shutil
 import subprocess
 
 from lociaction.adapters.model.types import ClientStatus, ModelClient
-from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
+from lociaction.config import (
+    LOCAL_DISTILL_BASE_URL,
+    LOCAL_DISTILL_MODEL,
+    MAX_CONFIG_FILE_BYTES,
+)
 
 # v1 で discover() が調べる client id（表示順 = recommended 優先度）
 DISCOVERABLE_CLIENT_IDS = (
@@ -377,17 +381,69 @@ def write_client_config(config_path, client: ModelClient) -> None:
 
     値は tomli_w でシリアライズする（手書き f-string 組み立てだと base_url/model に
     `"` や `\\` が含まれた際に config.toml が壊れ、次回起動のパースが失敗するため）。
+
+    leaf の open は `open_dir_relative()`（openat 相当）で行い、is_symlink()
+    チェックと別の write_text() 呼び出しの間に symlink を仕込まれる TOCTOU
+    window も、親 `.lociaction/` 自体を後から symlink にすり替えるレースも
+    構造的に閉じる（`.gitignore`/`distill.lock` に既に適用済みの同じパターンを
+    dir_fd 経由へ強化したもの。LOCI-REGISTRY-CONFIG-TOCTOU-01 /
+    LOCI-REGISTRY-CONFIGDIR-TOCTOU-01）。
     """
+    import errno
+    import os
+    import stat
     import tomllib
 
     import tomli_w
 
-    existing: dict = {}
-    if config_path.exists():
-        with config_path.open("rb") as f:
-            existing = tomllib.load(f)
+    from lociaction.paths import open_dir_relative
 
-    distill = dict(existing.get("distill", {}))
+    existing: dict = {}
+    try:
+        read_fd = open_dir_relative(
+            config_path.parent, config_path.name, os.O_RDONLY | os.O_NONBLOCK
+        )
+    except FileNotFoundError:
+        read_fd = None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(
+                f"refusing symlinked config file: {config_path}"
+            ) from exc
+        raise
+    if read_fd is not None:
+        try:
+            st = os.fstat(read_fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"refusing non-regular config file: {config_path}")
+            if st.st_size > MAX_CONFIG_FILE_BYTES:
+                raise ValueError(
+                    f"refusing config file that exceeds {MAX_CONFIG_FILE_BYTES} bytes: "
+                    f"{config_path}"
+                )
+            with os.fdopen(read_fd, "rb") as f:
+                read_fd = -1
+                try:
+                    existing = tomllib.load(f)
+                except (
+                    tomllib.TOMLDecodeError,
+                    RecursionError,
+                    MemoryError,
+                ) as exc:
+                    raise ValueError(
+                        f"refusing malformed config file: {config_path}"
+                    ) from exc
+        finally:
+            if read_fd != -1:
+                os.close(read_fd)
+
+    # [distill]/[index] は攻撃者制御の repo が出荷しうる config.toml から
+    # そのまま tomllib.load() された未検証の値なので、load_config() と同じく
+    # テーブル（dict）であることを確認してから使う。省略すると `distill = "x"`
+    # のような scalar 代入で dict()/.get() が例外を投げてクラッシュする
+    # (LOCI-REGISTRY-MALFORMED-SECTION-CRASH-01)。
+    raw_distill = existing.get("distill", {})
+    distill = dict(raw_distill) if isinstance(raw_distill, dict) else {}
     distill.pop("provider", None)
     distill["client"] = client.id
     if client.model:
@@ -409,11 +465,30 @@ def write_client_config(config_path, client: ModelClient) -> None:
     lines.append(tomli_w.dumps(distill_out).rstrip("\n"))
     lines.append("")
     lines.append("[index]")
-    index_min_chars = existing.get("index", {}).get("min_chars")
-    if index_min_chars is not None:
-        lines.append(f"min_chars = {index_min_chars}")
+    # existing は未検証の tomllib.load() 結果なので、load_config() と同じ型検証を
+    # 経ずに手書き f-string へ埋め込むと TOML injection になる
+    # (LOCI-REGISTRY-TOML-INJECT-INDEX)。[distill] と同様 tomli_w でシリアライズする。
+    raw_index = existing.get("index", {})
+    raw_index_min_chars = raw_index.get("min_chars") if isinstance(raw_index, dict) else None
+    if isinstance(raw_index_min_chars, int) and not isinstance(
+        raw_index_min_chars, bool
+    ):
+        lines.append(tomli_w.dumps({"min_chars": raw_index_min_chars}).rstrip("\n"))
     else:
         lines.append("# min_chars = 50   # trivial フィルタ閾値（文字数）")
-    lines.append("")
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text("\n".join(lines))
+    try:
+        write_fd = open_dir_relative(
+            config_path.parent,
+            config_path.name,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o644,
+        )
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(
+                f"refusing symlinked config file: {config_path}"
+            ) from exc
+        raise
+    with os.fdopen(write_fd, "w") as f:
+        f.write("\n".join(lines))

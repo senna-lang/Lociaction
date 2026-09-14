@@ -65,11 +65,15 @@ class _JsonlChunk:
 
 
 # ---- 内部ヘルパー ----
+# Session-log JSONL の上限。超過した行以降は読み捨て、index 全体は落とさない。
+JSONL_MAX_LINE_BYTES = 1_048_576
+JSONL_MAX_TOTAL_BYTES = 64 * 1_048_576
+JSONL_MAX_ENTRIES = 100_000
 
 
 def _extract_tool_use_files(entries: list[dict | None]) -> list[str]:
     """
-    assistant エントリから tool_use ブロックの file_path を抽出する。
+    assistant エントリから tool_use ブロックの明示的な file_path / notebook_path を抽出する。
     外部パスは除外し、重複をトリムしたリストを返す（順序保持）。
     """
     seen: set[str] = set()
@@ -95,20 +99,21 @@ def _extract_tool_use_files(entries: list[dict | None]) -> list[str]:
             if block.get("type") != "tool_use":
                 continue
 
-            name = block.get("name")
-            if name not in {"Edit", "Write", "Read", "MultiEdit", "NotebookEdit"}:
-                continue
-
             input_dict = block.get("input")
             if not isinstance(input_dict, dict):
                 continue
 
-            # NotebookEdit の場合は notebook_path、その他は file_path
-            path = None
-            if name == "NotebookEdit":
-                path = input_dict.get("notebook_path")
-            else:
-                path = input_dict.get("file_path")
+            # ツール名に依存せず、batch contract の明示的なパスだけを受け付ける。
+            # notebook_path は file_path より優先する。
+            notebook_path = input_dict.get("notebook_path")
+            file_path = input_dict.get("file_path")
+            path = (
+                notebook_path
+                if isinstance(notebook_path, str)
+                else file_path
+                if isinstance(file_path, str)
+                else None
+            )
 
             if not path or not isinstance(path, str):
                 continue
@@ -194,23 +199,27 @@ def _load_raw_entries(jsonl_path: Path, last_ply_end: int) -> list[dict | None]:
     """.jsonl を1行ずつ読んで raw entry のリストを返す。
     last_ply_end 以前の行は None プレースホルダに置き換える（既インデックス領域の再構築を避ける）。
     parse_exchanges と code_touches 抽出（index_file）の両方から同じ ply 座標系で参照するための共有ローダー。
+    1行・合計バイト・保持件数のいずれかが上限を超えたらそこで打ち切る。
     """
     raw_entries: list[dict | None] = []
     if not jsonl_path.exists():
         return raw_entries
     ply = 0
-    with jsonl_path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+    total_bytes = 0
+    with jsonl_path.open("rb") as stream:
+        for raw_line in stream:
+            line = raw_line.strip()
             if not line:
                 continue
+            if len(line) > JSONL_MAX_LINE_BYTES:
+                break
+            total_bytes += len(line)
+            if total_bytes > JSONL_MAX_TOTAL_BYTES:
+                break
             if ply <= last_ply_end:
-                # 既インデックス領域: 古い exchange は再構築しない（None プレースホルダ）。
-                # ただし malformed 行は位置に数えない — last_ply_end は成功パース行のみを
-                # 数えた座標系なので、検証パースして同じ座標系を維持する。
                 try:
                     json.loads(line)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     continue
                 raw_entries.append(None)
                 ply += 1
@@ -218,34 +227,46 @@ def _load_raw_entries(jsonl_path: Path, last_ply_end: int) -> list[dict | None]:
                 try:
                     raw_entries.append(json.loads(line))
                     ply += 1
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValueError):
                     continue
+            if len(raw_entries) >= JSONL_MAX_ENTRIES:
+                break
     return raw_entries
 
 
 def _load_incremental_raw_entries(
     jsonl_path: Path, byte_offset: int, ply_offset: int
 ) -> _JsonlChunk:
-    """永続バイトカーソル以降だけを読み、成功パース行の座標を維持する。"""
+    """永続バイトカーソル以降だけを読み、成功パース行の座標を維持する。
+    上限超過時はそこまでの受理済み entry だけを返し、cursor は進まない。
+    """
     if not jsonl_path.exists():
         return _JsonlChunk([], ply_offset, [])
 
     entries: list[dict | None] = []
     end_offsets: list[int] = []
+    total_bytes = 0
     with jsonl_path.open("rb") as stream:
         stream.seek(byte_offset)
-        for line in stream:
+        for raw_line in stream:
             end_offset = stream.tell()
-            line = line.strip()
+            line = raw_line.strip()
             if not line:
                 continue
+            if len(line) > JSONL_MAX_LINE_BYTES:
+                break
+            total_bytes += len(line)
+            if total_bytes > JSONL_MAX_TOTAL_BYTES:
+                break
             try:
                 entry = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
                 continue
             if isinstance(entry, dict):
                 entries.append(entry)
                 end_offsets.append(end_offset)
+                if len(entries) >= JSONL_MAX_ENTRIES:
+                    break
     return _JsonlChunk(entries, ply_offset, end_offsets)
 
 

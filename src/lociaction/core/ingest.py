@@ -66,13 +66,19 @@ def _git_blob_near(project_root: Path, rel_path: str, ts: str | None) -> bytes |
 
 
 def _resolve_symbols_at(
-    resolver: SymbolResolver, project_root: Path, touch_file_path: str, rel_path: str, ts: str | None
+    resolver: SymbolResolver, project_root: Path, rel_path: str, ts: str | None
 ) -> list[Symbol]:
-    """Resolve symbols as of `ts` via git, falling back to the live disk file."""
+    """Resolve symbols as of `ts` via git, falling back to the live disk file.
+
+    フォールバック読み取りは project_root / rel_path（正規化済み・containment 確認済み）
+    だけを対象にする。touch.file_path（harness から届く生の文字列）を直接
+    Path() へ渡すと、CWD != project_root のとき任意ファイル読み取りに繋がる
+    (LOCI-PATHTRAV-DISTILL-01 の live-path 変種)。
+    """
     source = _git_blob_near(project_root, rel_path, ts)
     if source is not None:
         return resolver.extract_source(source, rel_path)
-    return resolver.extract(Path(touch_file_path))
+    return resolver.extract(project_root / rel_path)
 
 
 def _git_log_for_path(project_root: Path, rel_path: str) -> list[tuple[float, str]]:
@@ -262,6 +268,7 @@ def ingest_parse_result(
 
     inserted = 0
     inserted_ids: dict[str, str] = {}
+    project_root = str(Path(session.project_key))
     for exchange in result.exchanges:
         exchange_id = sha256(
             ":".join(
@@ -311,18 +318,21 @@ def ingest_parse_result(
             inserted += 1
             inserted_ids[exchange.source_turn_id] = exchange_id
         for file_path in exchange.files_touched:
+            normalized_path = normalize_repo_path(file_path, project_root)
+            if normalized_path is None:
+                continue
             con.execute(
                 (
                     "INSERT OR IGNORE INTO exchange_files "
                     "(exchange_id, file_path) VALUES (?, ?)"
                 ),
-                (exchange_id, file_path),
+                (exchange_id, normalized_path),
             )
     _persist_artifacts(
         con,
         result,
         inserted_ids,
-        Path(session.project_key),
+        Path(project_root),
     )
     if result.exchanges:
         con.execute(
@@ -403,7 +413,7 @@ def _persist_artifacts(
             symbols = symbol_cache.get(cache_key)
             if symbols is None:
                 symbols = _resolve_symbols_at(
-                    resolver, project_root, touch.file_path, rel_path, touch.ts
+                    resolver, project_root, rel_path, touch.ts
                 )
                 symbol_cache[cache_key] = symbols
             for symbol in symbols:

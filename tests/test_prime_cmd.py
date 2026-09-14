@@ -31,10 +31,27 @@ def test_prime_text_has_concrete_search_example():
     assert 'loci search "BM25 RRF fusion ranking"' in PRIME_TEXT
 
 
+def test_prime_text_warns_not_to_paste_raw_transcripts():
+    assert "Do not paste `loci show` or `loci dump` output" in PRIME_TEXT
+    assert "credentials" in PRIME_TEXT
+
+
 def test_prime_text_has_concrete_context_example():
     """PRIME_TEXT must contain a concrete U1 (file+symbol) loci context example
     (design §6.1: --symbol is no longer the primary form shown to agents)"""
     assert "loci context src/lociaction/search.py:search_combined" in PRIME_TEXT
+
+
+def test_prime_text_has_concrete_recall_example():
+    """PRIME_TEXT must document loci recall as the resume-style session browser"""
+    assert 'loci recall "grouped-query-attention"' in PRIME_TEXT
+    assert "loci recall --session <session_id>" in PRIME_TEXT
+    assert "loci recall --file src/lociaction/search.py --branch" in PRIME_TEXT
+    assert "### Session start" in PRIME_TEXT
+    context_idx = PRIME_TEXT.index("### Context")
+    recall_idx = PRIME_TEXT.index("### Session start")
+    search_idx = PRIME_TEXT.index("### Search")
+    assert context_idx < recall_idx < search_idx
 
 
 def test_prime_text_context_section_is_marked_primary_and_comes_first():
@@ -49,7 +66,10 @@ def test_prime_text_context_section_is_marked_primary_and_comes_first():
 def test_prime_text_search_section_is_marked_secondary():
     """design §6.4: loci search must be demoted to a secondary fallback"""
     search_heading_end = PRIME_TEXT.index("\n", PRIME_TEXT.index("### Search"))
-    assert "secondary" in PRIME_TEXT[PRIME_TEXT.index("### Search") : search_heading_end].lower()
+    assert (
+        "secondary"
+        in PRIME_TEXT[PRIME_TEXT.index("### Search") : search_heading_end].lower()
+    )
 
 
 def test_prime_text_context_section_explains_bidirectional_recall():
@@ -74,7 +94,9 @@ def test_prime_text_context_field_notes_no_confidence_score():
     (no confidence score) so the agent does not treat them as equally certain."""
     context_section_start = PRIME_TEXT.index("`context` array")
     context_section_end = PRIME_TEXT.index("\n\n", context_section_start)
-    assert "no confidence score" in PRIME_TEXT[context_section_start:context_section_end]
+    assert (
+        "no confidence score" in PRIME_TEXT[context_section_start:context_section_end]
+    )
 
 
 # ---- IDE selection trigger contract ----
@@ -157,3 +179,16 @@ def test_inject_agents_md_missing_end_marker_leaves_file_untouched(
 
     assert result is False
     assert agents_md.read_text() == original
+
+
+def test_inject_agents_md_rejects_symlink_without_mutating_target(
+    tmp_path: Path, capsys
+) -> None:
+    """project-root の AGENTS.md symlink は外部ファイルへの書込みを防ぐため拒否する。"""
+    outside = tmp_path / "outside.md"
+    outside.write_text("must remain unchanged")
+    (tmp_path / "AGENTS.md").symlink_to(outside)
+
+    assert inject_agents_md(tmp_path) is False
+    assert outside.read_text() == "must remain unchanged"
+    assert "refusing symlinked AGENTS.md" in capsys.readouterr().err

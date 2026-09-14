@@ -147,6 +147,26 @@ def test_context_branch_only_returns_results(tmp_path, monkeypatch):
     assert "exchange_id" in data[0]
 
 
+def test_context_branch_only_text_output_sanitizes_git_branch(tmp_path, monkeypatch):
+    """branch-only text 表示は git_branch を sanitize せず echo していた
+    (LOCI-CLI-001)。制御シーケンスが terminal に渡らないことを確認する。"""
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    _insert_fixture(con)
+    con.execute(
+        "UPDATE exchanges SET git_branch=? WHERE id=?",
+        ("main\x1b[31mpwned", "ex1"),
+    )
+    con.commit()
+    con.close()
+
+    result = runner.invoke(app, ["context", "--branch", "main"])
+
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "pwned" in result.output
+
+
 def test_context_no_args_exits_1(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     db, con = _setup(tmp_path)
@@ -205,6 +225,7 @@ def test_search_json_has_git_branch_field(tmp_path, monkeypatch):
         assert "git_branch" in data[0]
         assert data[0]["git_branch"] == "feature-branch"
 
+
 def test_search_json_includes_result_score(tmp_path, monkeypatch):
     """Agents can apply confidence thresholds to machine-readable search results."""
     from unittest.mock import MagicMock, patch
@@ -252,9 +273,7 @@ def test_context_closes_connection_when_symbol_query_fails(tmp_path, monkeypatch
     _db, con = _setup(tmp_path)
     con.close()
     failing_connection = FailingConnection()
-    monkeypatch.setattr(
-        "lociaction.db.get_connection", lambda _db: failing_connection
-    )
+    monkeypatch.setattr("lociaction.db.get_connection", lambda _db: failing_connection)
 
     result = runner.invoke(app, ["context", "--symbol", "MyFunc"])
 
@@ -276,9 +295,7 @@ def test_context_closes_connection_when_target_resolution_fails(tmp_path, monkey
     _db, con = _setup(tmp_path)
     con.close()
     failing_connection = FailingConnection()
-    monkeypatch.setattr(
-        "lociaction.db.get_connection", lambda _db: failing_connection
-    )
+    monkeypatch.setattr("lociaction.db.get_connection", lambda _db: failing_connection)
 
     result = runner.invoke(app, ["context", "src/foo.py"])
 
@@ -523,6 +540,63 @@ def test_context_no_results_at_all(tmp_path, monkeypatch):
         result = runner.invoke(app, ["context", "src/nomatch.py:missing"])
         assert result.exit_code == 0
         assert "No results found." in result.output
+
+
+def test_context_json_empty_results_is_array(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    con.close()
+
+    with (
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[]),
+    ):
+        result = runner.invoke(app, ["context", "src/nomatch.py:missing", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_context_symbol_json_empty_results_is_array(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    con.close()
+    result = runner.invoke(app, ["context", "--symbol", "NoSuchSymbol", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_search_json_empty_results_is_array(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    con.close()
+
+    with (
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[]),
+    ):
+        result = runner.invoke(app, ["search", "nothing matches", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_search_text_empty_results_stays_human(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.chdir(tmp_path)
+    db, con = _setup(tmp_path)
+    con.close()
+
+    with (
+        patch("lociaction.embedder.Embedder", return_value=MagicMock()),
+        patch("lociaction.search.search_combined", return_value=[]),
+    ):
+        result = runner.invoke(app, ["search", "nothing matches"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "No results found."
 
 
 def test_context_not_initialized_exits_1_for_target(tmp_path, monkeypatch):

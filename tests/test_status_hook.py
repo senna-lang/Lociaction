@@ -40,6 +40,7 @@ def test_status_not_initialized(tmp_path, monkeypatch):
     result = runner.invoke(app, ["status"])
     assert result.exit_code != 0
     assert "loci init" in result.output
+    assert "loci docs show getting-started" in result.output
 
 
 def test_status_empty_db(tmp_path, monkeypatch):
@@ -48,6 +49,7 @@ def test_status_empty_db(tmp_path, monkeypatch):
     result = runner.invoke(app, ["status"])
     assert result.exit_code == 0
     assert "0" in result.output
+
 
 def test_status_closes_connection_when_query_fails(tmp_path, monkeypatch):
     class FailingConnection:
@@ -62,9 +64,7 @@ def test_status_closes_connection_when_query_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _setup_db(tmp_path)
     failing_connection = FailingConnection()
-    monkeypatch.setattr(
-        "lociaction.db.get_connection", lambda _db: failing_connection
-    )
+    monkeypatch.setattr("lociaction.db.get_connection", lambda _db: failing_connection)
 
     result = runner.invoke(app, ["status"])
 
@@ -109,7 +109,16 @@ def test_status_counts_exchanges(tmp_path, monkeypatch):
     )
     con.execute(
         "INSERT INTO exchanges (id, conversation_id, ply_start, ply_end, user_content, agent_content, distilled_at, distill_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (ex_id2, conv_id, 2, 3, "foo bar", "baz qux", "2026-01-01T00:00:00", "distilled"),
+        (
+            ex_id2,
+            conv_id,
+            2,
+            3,
+            "foo bar",
+            "baz qux",
+            "2026-01-01T00:00:00",
+            "distilled",
+        ),
     )
     con.commit()
     con.close()
@@ -136,6 +145,7 @@ def test_status_does_not_probe_distill_client_without_check(tmp_path, monkeypatc
         '[distill]\nclient = "claude-cli"\n'
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
 
     with patch("lociaction.adapters.model.registry.check_ready") as check_ready:
         result = runner.invoke(app, ["status", "--json"])
@@ -146,12 +156,14 @@ def test_status_does_not_probe_distill_client_without_check(tmp_path, monkeypatc
     assert data["distill_available"] is None
     assert data["distill_checked"] is False
 
+
 def test_status_shows_ready_distill_client(tmp_path, monkeypatch):
     _setup_db(tmp_path)
     (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nclient = "claude-cli"\n'
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
 
     from lociaction.adapters.model.types import ClientStatus, ModelClient
 
@@ -246,7 +258,6 @@ def test_status_surfaces_last_distill_error_in_json_and_text(tmp_path, monkeypat
     assert "claude --print timed out" in text.output
 
 
-
 # ---- hook install ----
 
 
@@ -260,12 +271,11 @@ def test_hook_install_creates_settings(tmp_path, monkeypatch):
     assert "hooks" in data
     assert "Stop" in data["hooks"]
 
+
 def test_hook_install_omp_pi_writes_dedicated_extension_file(tmp_path, monkeypatch):
     """omp-pi は FallbackHooks ではなく ~/.omp/agent/extensions/*.ts へ実際に書く（issue #40）"""
     ext_path = tmp_path / ".omp" / "agent" / "extensions" / "lociaction.ts"
-    monkeypatch.setattr(
-        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
-    )
+    monkeypatch.setattr("lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hook", "install", "--harness", "omp-pi"])
 
@@ -287,9 +297,7 @@ def test_hook_uninstall_omp_pi_removes_only_marker_owned_file(tmp_path, monkeypa
     ext_dir.mkdir(parents=True)
     other_file = ext_dir / "other-tool.ts"
     other_file.write_text("// not ours\n")
-    monkeypatch.setattr(
-        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
-    )
+    monkeypatch.setattr("lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path)
 
     runner.invoke(app, ["hook", "install", "--harness", "omp-pi"])
     result = runner.invoke(app, ["hook", "uninstall", "--harness", "omp-pi"])
@@ -301,9 +309,7 @@ def test_hook_uninstall_omp_pi_removes_only_marker_owned_file(tmp_path, monkeypa
 
 def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatch):
     plugin_path = tmp_path / ".config" / "opencode" / "plugins" / "lociaction.ts"
-    monkeypatch.setattr(
-        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
-    )
+    monkeypatch.setattr("lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hook", "install", "--harness", "opencode"])
 
@@ -319,9 +325,7 @@ def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatc
 
 def test_hook_install_grok_uses_native_hooks_file(tmp_path, monkeypatch):
     hooks_path = tmp_path / ".grok" / "hooks" / "lociaction.json"
-    monkeypatch.setattr(
-        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
-    )
+    monkeypatch.setattr("lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hook", "install", "--harness", "grok"])
 
@@ -357,18 +361,14 @@ def test_hook_install_grok_uses_native_hooks_file(tmp_path, monkeypatch):
 
 def test_hook_install_codex_uses_native_hooks_file(tmp_path, monkeypatch):
     hooks_path = tmp_path / ".codex" / "hooks.json"
-    monkeypatch.setattr(
-        "lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path
-    )
+    monkeypatch.setattr("lociaction.adapters.harness.hooks.Path.home", lambda: tmp_path)
 
     result = runner.invoke(app, ["hook", "install", "--harness", "codex"])
 
     assert result.exit_code == 0
     data = json.loads(hooks_path.read_text())
     stop_commands = [
-        hook["command"]
-        for entry in data["hooks"]["Stop"]
-        for hook in entry["hooks"]
+        hook["command"] for entry in data["hooks"]["Stop"] for hook in entry["hooks"]
     ]
     assert any("loci index --harness codex" in command for command in stop_commands)
     session_commands = [
@@ -382,6 +382,7 @@ def test_hook_install_codex_uses_native_hooks_file(tmp_path, monkeypatch):
 
     second = runner.invoke(app, ["hook", "install", "--harness", "codex"])
     assert "already up to date" in second.output
+
 
 def test_hook_install_adds_command(tmp_path, monkeypatch):
     monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)
@@ -471,11 +472,11 @@ def test_hook_install_prime_idempotent(tmp_path, monkeypatch):
     settings_path = tmp_path / ".claude" / "settings.json"
     data = json.loads(settings_path.read_text())
     session_start_commands = [
-        h
-        for entry in data["hooks"]["SessionStart"]
-        for h in entry.get("hooks", [])
+        h for entry in data["hooks"]["SessionStart"] for h in entry.get("hooks", [])
     ]
-    prime_hooks = [h for h in session_start_commands if "loci prime" in h.get("command", "")]
+    prime_hooks = [
+        h for h in session_start_commands if "loci prime" in h.get("command", "")
+    ]
     assert len(prime_hooks) == 1
 
 
@@ -549,6 +550,7 @@ def test_write_settings_failure_keeps_original_intact(tmp_path, monkeypatch):
     # os.replace を例外を投げる mock に patch する
     with patch("lociaction.hooks.os.replace", side_effect=OSError("disk full")):
         from lociaction.hooks import install_hooks
+
         # install_hooks() が OSError を送出することを確認
         with pytest.raises(OSError):
             install_hooks()
@@ -600,11 +602,13 @@ def test_hook_uninstall_preserves_user_hooks(tmp_path, monkeypatch):
     settings_path = tmp_path / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(
-        json.dumps({
-            "hooks": {
-                "Stop": [{"hooks": [{"type": "command", "command": "my-tool run"}]}]
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "my-tool run"}]}]
+                }
             }
-        })
+        )
     )
 
     runner.invoke(app, ["hook", "install"])
@@ -759,6 +763,7 @@ def test_hook_uninstall_does_not_delete_unrelated_command_with_loci_substring(
     ]
     assert "/home/user/tools/my-loci-backup.sh --index" in stop_commands
 
+
 def test_hook_uninstall_preserves_quoted_loci_path_passed_to_unrelated_command(
     tmp_path, monkeypatch
 ):
@@ -769,11 +774,7 @@ def test_hook_uninstall_preserves_quoted_loci_path_passed_to_unrelated_command(
     command = 'printf "%s\\n" "/opt/other/bin/loci" index'
     settings_path.write_text(
         json.dumps(
-            {
-                "hooks": {
-                    "Stop": [{"hooks": [{"type": "command", "command": command}]}]
-                }
-            }
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]}}
         )
     )
 
@@ -786,7 +787,10 @@ def test_hook_uninstall_preserves_quoted_loci_path_passed_to_unrelated_command(
     data = json.loads(settings_path.read_text())
     assert data["hooks"]["Stop"][0]["hooks"][0]["command"] == command
 
-def test_hook_uninstall_does_not_delete_relative_bin_loci_command(tmp_path, monkeypatch):
+
+def test_hook_uninstall_does_not_delete_relative_bin_loci_command(
+    tmp_path, monkeypatch
+):
     """絶対パスではない `bin/loci` は lociaction が生成する hook ではないため、
     action 名が同居していてもユーザーコマンドとして残す。"""
     monkeypatch.setattr("lociaction.hooks.Path.home", lambda: tmp_path)

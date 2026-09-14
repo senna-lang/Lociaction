@@ -83,6 +83,29 @@ def test_integer_epoch_timestamp_is_normalized_to_iso() -> None:
     assert edit.ts.startswith("2026-")
 
 
+
+def test_out_of_range_numeric_timestamp_does_not_abort_touch_extraction() -> None:
+    """破損ログの epoch は timestamp だけを捨て、他の編集記録は残す。"""
+    entries: list[dict[str, Any] | None] = [
+        {
+            "timestamp": 1e20,
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-overflow",
+                    "title": "write",
+                    "rawInput": {"file_path": "/repo/src/safe.py"},
+                }
+            },
+        }
+    ]
+
+    touches = extract_code_touches(entries)
+
+    assert len(touches) == 1
+    assert touches[0].file_path == "/repo/src/safe.py"
+    assert touches[0].ts is None
+
 def test_failed_tool_call_is_not_recorded() -> None:
     """old_string が見つからず失敗した編集は適用されていないので記録しない。"""
     touches = extract_code_touches(_entries())
@@ -115,3 +138,27 @@ def test_ignores_hook_and_other_session_update_kinds() -> None:
 def test_ignores_none_placeholder_entries() -> None:
     """既インデックス領域の None プレースホルダで落ちない。"""
     assert extract_code_touches([None, None]) == []
+
+
+def test_excessive_distinct_edit_calls_fail_closed_per_exchange(monkeypatch) -> None:
+    """異なる toolCallId が上限を超える未信頼 exchange は、資源消費と不完全な
+    path policy 判定を避けるため touch だけでなく exchange 全体を破棄できる
+    シグナルを返す（LOCI-GROK-TOUCH-FANOUT-01）。"""
+    import lociaction.adapters.harness.grok as grok
+
+    monkeypatch.setattr(grok, "MAX_EDIT_CALLS_PER_EXCHANGE", 2)
+    entries: list[dict[str, Any] | None] = [
+        {
+            "params": {
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": f"call-{index}",
+                    "title": "write",
+                    "rawInput": {"file_path": f"/repo/{index}.py"},
+                }
+            }
+        }
+        for index in range(3)
+    ]
+
+    assert grok.extract_code_touches(entries) == []

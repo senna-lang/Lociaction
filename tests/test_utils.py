@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lociaction.utils import escape_like
+from lociaction.utils import escape_like, sanitize_terminal_text
 
 
 def test_escape_like_escapes_percent_wildcard() -> None:
@@ -34,3 +34,16 @@ def test_escape_like_handles_empty_string() -> None:
 
 def test_escape_like_supports_custom_escape_char() -> None:
     assert escape_like("100%", escape_char="!") == "100!%"
+
+
+def test_sanitize_terminal_text_strips_csi_and_osc() -> None:
+    raw = "ok\x1b[31mred\x1b]8;;https://evil\x07link\x1b]8;;\x07"
+    cleaned = sanitize_terminal_text(raw)
+    assert "\x1b" not in cleaned
+    assert "ok" in cleaned
+    assert "red" in cleaned
+    assert "link" in cleaned
+
+
+def test_sanitize_terminal_text_none_is_empty() -> None:
+    assert sanitize_terminal_text(None) == ""

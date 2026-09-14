@@ -5,7 +5,11 @@ tree-sitter で Python / TypeScript / Go / Rust / Java / C# / Ruby のシンボ�
 抽出対象: 関数・クラス・メソッド（symbol_name / symbol_kind / signature / line）
 """
 
-from lociaction.resolver import Symbol, SymbolResolver
+from lociaction.resolver import (
+    Symbol,
+    SymbolResolver,
+    _nesting_depth_exceeds,
+)
 
 resolver = SymbolResolver()
 
@@ -44,6 +48,26 @@ def test_extract_source_matches_extract_for_equivalent_bytes(tmp_path):
 
 def test_extract_source_unsupported_suffix_returns_empty(tmp_path):
     assert resolver.extract_source(b"anything", "foo.kt") == []
+
+
+def test_extract_source_returns_empty_on_recursion_error(monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise RecursionError
+
+    monkeypatch.setattr(resolver, "_extract_python", boom)
+    assert resolver.extract_source(b"def greet():\n    return 1\n", "foo.py") == []
+
+
+def test_nesting_depth_exceeds_detects_deep_brackets() -> None:
+    assert _nesting_depth_exceeds(b"(" * 10, limit=5) is True
+    assert _nesting_depth_exceeds(b"(" * 5, limit=5) is False
+
+
+def test_extract_source_skips_pathologically_nested_source_without_parsing() -> None:
+    """native tree-sitter parse() は Python の RecursionError で捕捉できないため、
+    危険な深さのソースは parse() 自体を呼ばず空リストを返す(LOCI-RESOLVER-PARSE-DOS-01)"""
+    pathological = b"(" * 5000 + b")" * 5000
+    assert resolver.extract_source(pathological, "foo.py") == []
 
 
 def test_python_method(tmp_path):

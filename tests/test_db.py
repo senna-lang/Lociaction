@@ -7,6 +7,8 @@ import os
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from lociaction.db import (
     _MIGRATIONS,
     _backfill_touch_time_symbol_edges,
@@ -20,6 +22,38 @@ from lociaction.db import (
 from lociaction.utils import sha256
 from tests.conftest import run_git
 
+
+def test_init_db_rejects_symlinked_state_directory(tmp_path: Path) -> None:
+    """.lociaction/ 自体が symlink の場合、mkdir/connect 直前の再チェックで拒否する
+    (LOCI-INIT-LOCIACTION-SYMLINK-TOCTOU)。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    state_dir = tmp_path / ".lociaction"
+    state_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlinked state directory"):
+        init_db(state_dir / "memory.db")
+
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("leaf", ("memory.db", "memory.db-wal", "memory.db-shm"))
+@pytest.mark.parametrize("open_database", (init_db, get_connection))
+def test_database_open_rejects_symlinked_state_leaves(
+    tmp_path: Path, leaf: str, open_database
+) -> None:
+    """SQLite の DB/WAL/SHM が外部ファイルを指す場合、開く前に拒否する。"""
+    state_dir = tmp_path / ".lociaction"
+    state_dir.mkdir()
+    outside = tmp_path / "outside.db"
+    outside.write_text("must remain unchanged")
+    db_path = state_dir / "memory.db"
+    (state_dir / leaf).symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlinked database state file"):
+        open_database(db_path)
+
+    assert outside.read_text() == "must remain unchanged"
 
 def test_init_db_creates_conversations_table(tmp_path: Path) -> None:
     db_path = tmp_path / "memory.db"

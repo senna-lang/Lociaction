@@ -79,6 +79,14 @@ exclude = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/lociaction"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/lociaction/docs/distillation.md" = "lociaction/docs/distillation.md"
+"src/lociaction/docs/getting-started.md" = "lociaction/docs/getting-started.md"
+"src/lociaction/docs/harnesses.md" = "lociaction/docs/harnesses.md"
+"src/lociaction/docs/privacy.md" = "lociaction/docs/privacy.md"
+"src/lociaction/docs/recall.md" = "lociaction/docs/recall.md"
+"src/lociaction/docs/troubleshooting.md" = "lociaction/docs/troubleshooting.md"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

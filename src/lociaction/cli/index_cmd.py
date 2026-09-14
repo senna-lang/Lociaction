@@ -8,6 +8,8 @@ from typing import Annotated
 
 import typer
 
+from lociaction.utils import sanitize_terminal_text
+
 _HARNESS_CHOICES = ("claude", "codex", "opencode", "omp-pi", "grok")
 
 # ハーネスごとのログファイル名パターン。同じディレクトリに別形式のファイルが
@@ -106,20 +108,18 @@ def _purge_foreign_codex_exchanges(db: Path, project_root: Path) -> int:
 def index(
     path: Annotated[
         Path | None,
-        typer.Option(
-            help="インデックス対象パス（opencode は DB ファイル、それ以外はディレクトリ）"
-        ),
+        typer.Option(help="Session path (OpenCode: DB file; others: directory)"),
     ] = None,
     harness: Annotated[
         str,
         typer.Option(
             "--harness",
-            help="ログ形式（all / claude / codex / opencode / omp-pi / grok）",
+            help="Log format (all / claude / codex / opencode / omp-pi / grok)",
         ),
     ] = "all",
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """指定ハーネスの未処理ログを exchange とコード編集記録へ取り込む。"""
+    """Index unprocessed session logs into exchanges and code-touch records."""
     from lociaction.config import load_config
     from lociaction.db import init_db
     from lociaction.indexer import index_file, index_opencode_db
@@ -131,14 +131,16 @@ def index(
         resolve_grok_sessions_path,
         resolve_omp_pi_sessions_path,
         resolve_opencode_db_path,
+        session_files_for_project,
     )
 
     root = find_project_root()
     db = db_path(root)
 
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
     if harness == "all":
         from lociaction.adapters.harness.registry import detected_jsonl_sources
 
@@ -212,6 +214,10 @@ def index(
             for rollout in jsonl_files
             if _codex_belongs_to_project(rollout, root)
         ]
+    elif harness in {"claude", "omp-pi"}:
+        jsonl_files = session_files_for_project(
+            target_dir, root, _LOG_PATTERNS.get(harness, "*.jsonl")
+        )
     if not jsonl_files:
         typer.echo("No session files found.")
         return
@@ -230,7 +236,7 @@ def index(
             continue
         files_with_new += 1
         if verbose:
-            typer.echo(f"  {jsonl.name}: {count} exchanges")
+            typer.echo(f"  {sanitize_terminal_text(jsonl.name)}: {count} exchanges")
         total_exchanges += count
 
     if total_exchanges == 0:

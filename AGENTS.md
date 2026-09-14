@@ -25,7 +25,7 @@ loci search "query" --json --limit 5
 loci context --branch NAME --json
 ```
 
-Use `loci recall --file PATH --branch NAME --json` at session start when both a code location and branch are known. It merges code-anchored context with semantic results, favoring recent decisions.
+Use `loci recall` at session start to browse past sessions instead of individual exchanges — bare for the newest sessions, with a keyword to rank sessions by relevance, `--session ID` for a session's one-line-per-exchange digest. `--file`/`--branch` filter either mode.
 
 ## CLI Surface
 
@@ -36,8 +36,10 @@ loci distill [--limit N] [--setup]            # Distill queued exchanges with th
 loci search "query" --json --limit 5          # Semantic recall over distilled conversations
 loci context <file>:<symbol> --json           # Code location → prior conversations
 loci context --branch NAME --json              # Branch → prior conversations
-loci recall --file PATH --branch NAME --json  # Session-start composite recall
+loci recall ["query"] [--session ID] [--file P] [--branch N]  # Resume: session list or one session's digest
 loci show "<exchange-id>" --json              # Read a stored verbatim exchange
+loci docs list [--json]                       # List version-matched documentation shipped with this install
+loci docs show <name>                         # Read a bundled topic (getting-started, recall, harnesses, distillation, troubleshooting, privacy)
 loci status                                   # Inspect index and distillation status
 loci gc                                       # Remove orphaned data while retaining backups
 loci hook install --harness NAME               # Install native lifecycle integration
@@ -103,3 +105,11 @@ tests/                # Deterministic pytest coverage and synthetic fixtures
 ## Release
 
 `v*` tags trigger the production PyPI workflow through GitHub OIDC. Verify clean-clone checks and an installed-package smoke test before creating a release tag. Publishing a version to PyPI is irreversible; obtain explicit approval immediately before pushing a release tag.
+
+<!-- BEGIN LOCIACTION -->
+## Past Memory Search (lociaction)
+
+IMPORTANT: Before changing code, retrieve relevant project memory with
+`loci context <file>:<symbol> --json`. Run `loci prime` when the full
+instructions are not already in context.
+<!-- END LOCIACTION -->

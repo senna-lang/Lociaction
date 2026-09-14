@@ -87,6 +87,81 @@ def test_load_config_broken_toml_fallback(tmp_path: Path) -> None:
     assert "config.toml" in cfg.config_error
 
 
+def test_load_config_parse_error_sanitizes_terminal_output(
+    tmp_path: Path, capsys
+) -> None:
+    """OSError/TOMLDecodeError の文字列は端末制御シーケンスを含みうる未信頼データ
+    なので、warning・config_error のどちらにも生の ESC を残さない
+    (LOCI-TERMINAL-SANITIZE-INCONSISTENT)。"""
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    (lociaction_dir / "config.toml").write_text("[distill]\n")
+    with patch(
+        "pathlib.Path.open",
+        side_effect=OSError("crafted \x1b]8;;https://evil.test\x1b\\x error"),
+    ):
+        cfg = load_config(tmp_path)
+    assert cfg.config_error is not None
+    assert "\x1b" not in cfg.config_error
+    assert "\x1b" not in capsys.readouterr().err
+
+
+def test_load_config_deeply_nested_toml_falls_back_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """攻撃者制御の config.toml が極端に深くネストしていても RecursionError で
+    クラッシュせず、他の壊れた config と同じくデフォルトへフォールバックする
+    (LOCI-CONFIG-TOML-RECURSION-DOS)。"""
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    depth = 4000
+    deeply_nested = "[" * depth + "]" * depth
+    (lociaction_dir / "config.toml").write_text(f"distill = {deeply_nested}\n")
+
+    cfg = load_config(tmp_path)
+
+    assert cfg == Config(config_error=cfg.config_error)
+    assert cfg.config_error is not None
+
+
+
+def test_load_config_oversized_file_falls_back_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """攻撃者制御の config.toml が上限を超える場合、tomllib.load() で
+    メモリを消費させず、他の壊れた config と同じくデフォルトへフォールバックする
+    (LOCI-CONFIG-TOML-MEMORYERROR-DOS)。"""
+    from lociaction.config import MAX_CONFIG_FILE_BYTES
+
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    oversized_value = "x" * (MAX_CONFIG_FILE_BYTES + 1)
+    (lociaction_dir / "config.toml").write_text(f'distill = "{oversized_value}"\n')
+
+    cfg = load_config(tmp_path)
+
+    assert cfg == Config(config_error=cfg.config_error)
+    assert cfg.config_error is not None
+    assert "exceeds" in cfg.config_error
+
+
+def test_load_config_rejects_batch_limit_above_automatic_hook_cap(
+    tmp_path: Path,
+) -> None:
+    """tracked config が自動 distill を全 pending exchange へ拡大できない
+    （LOCI-CONFIG-UNBOUNDED-BATCH-01）。"""
+    from lociaction.config import MAX_DISTILL_BATCH_LIMIT
+
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    (lociaction_dir / "config.toml").write_text(
+        f"[distill]\nbatch_limit = {MAX_DISTILL_BATCH_LIMIT + 1}\n"
+    )
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.distill_batch_limit == DEFAULT_DISTILL_BATCH_LIMIT
+
 def test_load_config_index_min_chars(tmp_path: Path) -> None:
     """index.min_chars が正しく読まれる"""
     lociaction_dir = tmp_path / ".lociaction"
@@ -179,16 +254,40 @@ def test_load_config_provider_invalid_fallback(tmp_path: Path) -> None:
     assert cfg.distill_provider == DEFAULT_DISTILL_PROVIDER
 
 
-def test_load_config_provider_openai_with_base_url(tmp_path: Path) -> None:
-    """provider = 'openai' で base_url が設定されている場合"""
+def test_load_config_rejects_remote_base_url_without_explicit_opt_in(
+    tmp_path: Path, capsys
+) -> None:
+    """プロジェクト設定だけでは会話をリモート endpoint へ送信させない。"""
     lociaction_dir = tmp_path / ".lociaction"
     lociaction_dir.mkdir()
     (lociaction_dir / "config.toml").write_text(
-        "[distill]\nprovider = 'openai'\nbase_url = 'http://localhost:11434/v1'\n"
+        "[distill]\nprovider = 'openai'\nbase_url = 'https://api.example.test/v1'\n"
     )
+
     cfg = load_config(tmp_path)
+
+    assert cfg.distill_provider == DEFAULT_DISTILL_PROVIDER
+    assert cfg.distill_base_url is None
+    assert "LOCIACTION_REMOTE_DISTILL_ORIGINS" in capsys.readouterr().err
+
+
+def test_load_config_allows_remote_base_url_with_explicit_opt_in(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """ユーザー環境で明示 opt-in した場合だけリモート endpoint を使える。"""
+    monkeypatch.setenv(
+        "LOCIACTION_REMOTE_DISTILL_ORIGINS", "https://api.example.test"
+    )
+    lociaction_dir = tmp_path / ".lociaction"
+    lociaction_dir.mkdir()
+    (lociaction_dir / "config.toml").write_text(
+        "[distill]\nprovider = 'openai'\nbase_url = 'https://api.example.test/v1'\n"
+    )
+
+    cfg = load_config(tmp_path)
+
     assert cfg.distill_provider == "openai"
-    assert cfg.distill_base_url == "http://localhost:11434/v1"
+    assert cfg.distill_base_url == "https://api.example.test/v1"
 
 
 def test_load_config_provider_openai_missing_base_url_fallback(tmp_path: Path) -> None:
@@ -243,36 +342,69 @@ def test_load_config_explicit_client_ollama_ft(tmp_path: Path) -> None:
     assert cfg.distill_unconfigured is False
 
 
-def test_load_config_client_wins_over_legacy_provider(tmp_path: Path) -> None:
-    """client と provider が両方あれば client が勝つ"""
+def test_load_config_rejects_unapproved_remote_client(tmp_path: Path, capsys) -> None:
+    """プロジェクト設定だけでリモート CLI へ会話を送信させない。"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
-        '[distill]\nclient = "claude-cli"\nprovider = "openai"\n'
-        'base_url = "http://localhost:11434/v1"\n'
+        '[distill]\nclient = "claude-cli"\n'
     )
-    cfg = load_config(tmp_path)
-    assert cfg.distill_client == "claude-cli"
 
+    cfg = load_config(tmp_path)
+
+    assert cfg.distill_client is None
+    assert cfg.distill_unconfigured is True
+    assert "LOCIACTION_REMOTE_DISTILL_CLIENTS" in capsys.readouterr().err
+
+def test_load_config_allows_approved_remote_client(tmp_path: Path, monkeypatch) -> None:
+    """ユーザー環境で明示許可した CLI client だけをプロジェクト設定から使う。"""
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nclient = "claude-cli"\n'
+    )
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.distill_client == "claude-cli"
+    assert cfg.distill_unconfigured is False
 
 def test_load_config_unknown_client_is_unconfigured(tmp_path: Path, capsys) -> None:
     """未知の client id は unconfigured として扱われ、暗黙解決しない"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
-        '[distill]\nclient = "bogus-client"\n'
+        '[distill]\nclient = "bogus\\u001b]8;;https://evil.test\\u001b\\\\x"\n'
     )
     cfg = load_config(tmp_path)
+    output = capsys.readouterr().err
     assert cfg.distill_client is None
     assert cfg.distill_unconfigured is True
-    assert "unknown distill.client" in capsys.readouterr().err
+    assert "unknown distill.client" in output
+    assert "\x1b" not in output
 
 
-def test_load_config_legacy_provider_claude_maps_to_claude_cli(tmp_path: Path) -> None:
-    """旧 provider = "claude" は client = "claude-cli" として解決される"""
+def test_load_config_legacy_provider_claude_requires_remote_client_grant(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """旧 provider alias も remote CLI 許可を迂回できない。"""
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text('[distill]\nprovider = "claude"\n')
     cfg = load_config(tmp_path)
     assert cfg.distill_client == "claude-cli"
     assert cfg.distill_unconfigured is False
+
+
+def test_load_config_rejects_unapproved_legacy_remote_provider(
+    tmp_path: Path,
+) -> None:
+    """legacy provider alias も user-environment grant なしには remote CLI を選べない。"""
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text('[distill]\nprovider = "claude"\n')
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.distill_client is None
+    assert cfg.distill_unconfigured is True
 
 
 def test_load_config_legacy_provider_openai_ollama_base_url_maps_to_ollama_ft(
@@ -289,9 +421,12 @@ def test_load_config_legacy_provider_openai_ollama_base_url_maps_to_ollama_ft(
 
 
 def test_load_config_legacy_provider_openai_other_base_url_maps_to_openai_compat(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """旧 provider = "openai" + 非 Ollama base_url は client = "openai-compat" として解決される"""
+    """opt-in 済みの非 Ollama endpoint は openai-compat として解決される。"""
+    monkeypatch.setenv(
+        "LOCIACTION_REMOTE_DISTILL_ORIGINS", "https://api.deepseek.com"
+    )
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nprovider = "openai"\nbase_url = "https://api.deepseek.com"\n'
@@ -299,6 +434,43 @@ def test_load_config_legacy_provider_openai_other_base_url_maps_to_openai_compat
     cfg = load_config(tmp_path)
     assert cfg.distill_client == "openai-compat"
     assert cfg.distill_unconfigured is False
+
+
+def test_load_config_rejects_explicit_remote_compat_client_without_opt_in(
+    tmp_path: Path,
+) -> None:
+    """リモート config は explicit client でも distillation を設定済みにしない。"""
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nclient = "openai-compat"\nmodel = "remote-model"\n'
+        'base_url = "https://api.example.test/v1"\n'
+    )
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.distill_base_url is None
+    assert cfg.distill_client is None
+    assert cfg.distill_unconfigured is True
+
+def test_load_config_rejects_file_scheme_base_url(tmp_path: Path, capsys) -> None:
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nprovider = "openai"\nbase_url = "file:///etc/passwd"\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.distill_base_url is None
+    assert cfg.distill_provider == DEFAULT_DISTILL_PROVIDER
+    assert "Warning" in capsys.readouterr().err
+
+
+def test_load_config_rejects_userinfo_base_url(tmp_path: Path) -> None:
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nprovider = "openai"\nbase_url = "https://user:pass@evil.example/v1"\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.distill_base_url is None
+    assert cfg.distill_client != "openai-compat"
 
 
 def test_load_config_neither_client_nor_provider_is_unconfigured(tmp_path: Path) -> None:
@@ -378,11 +550,12 @@ def test_load_config_legacy_provider_openai_ollama_missing_model_defers_to_none(
 
 
 def test_load_config_legacy_provider_openai_compat_missing_model_defers_to_none(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """旧 provider = "openai" + 非 Ollama base_url + model 未設定でも claude デフォルト
-    に落ちない（openai-compat には登録簿デフォルトが無いため、resolve 側で
-    エラーとして表面化させる — 誤ったモデル名を無言送信しない）"""
+    """opt-in 済みの remote compat endpoint は model を勝手に補完しない。"""
+    monkeypatch.setenv(
+        "LOCIACTION_REMOTE_DISTILL_ORIGINS", "https://api.deepseek.com"
+    )
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         "[distill]\nprovider = 'openai'\nbase_url = 'https://api.deepseek.com'\n"
@@ -409,12 +582,14 @@ def test_load_config_end_to_end_ollama_ft_resolves_to_local_distill_model(
 
 
 def test_load_config_end_to_end_openai_compat_missing_model_raises(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """end-to-end: provider="openai" (非 Ollama) + model 未設定 → resolve_client が
-    claude デフォルトへ無言フォールバックせず ValueError で明示的に失敗する"""
+    """opt-in 済み remote compat はモデル未設定を明示エラーにする。"""
     from lociaction.adapters.model.registry import resolve_client
 
+    monkeypatch.setenv(
+        "LOCIACTION_REMOTE_DISTILL_ORIGINS", "https://api.deepseek.com"
+    )
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         "[distill]\nprovider = 'openai'\nbase_url = 'https://api.deepseek.com'\n"

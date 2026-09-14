@@ -13,6 +13,7 @@ from lociaction.adapters.harness.jsonl_source import JsonlLogSource
 from lociaction.core.models import CanonicalSession
 from lociaction.indexer import Exchange
 from lociaction.models import CodeTouch
+from lociaction.paths import session_file_matches_project_root
 
 
 def _make_session(project_root: Path) -> CanonicalSession:
@@ -152,3 +153,27 @@ def test_parse_exchanges_artifacts_skip_blank_and_malformed_lines(
         (artifact.source_turn_id, [touch.file_path for touch in artifact.code_touches])
         for artifact in result.artifacts
     ] == [("1", ["src/target.py"])]
+
+
+def test_session_path_validator_excludes_foreign_collision_logs(tmp_path: Path) -> None:
+    """validator は同じ session directory 内でも foreign cwd のログを列挙しない。"""
+    project_root = tmp_path / "project"
+    foreign_root = tmp_path / "foreign"
+    project_root.mkdir()
+    foreign_root.mkdir()
+    own_log = project_root / "own.jsonl"
+    own_log.write_text(json.dumps({"cwd": str(project_root)}) + "\n")
+    foreign_log = project_root / "foreign.jsonl"
+    foreign_log.write_text(json.dumps({"cwd": str(foreign_root)}) + "\n")
+
+    source = JsonlLogSource(
+        "fake",
+        lambda root: root,
+        lambda *_args: [],
+        session_path_validator=session_file_matches_project_root,
+    )
+
+    assert source.detect(project_root) is True
+    assert [Path(session.primary_ref) for session in source.list_sessions(project_root)] == [
+        own_log.resolve()
+    ]

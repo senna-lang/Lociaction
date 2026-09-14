@@ -13,14 +13,19 @@
   (`exchange_id`, message, timestamp) from `meta` when one has been
   recorded; the field/section is omitted when nothing failed.
 
-- `loci recall --file X --branch Y --json` (issue #33) is a session-start
-  warmup that merges code-anchored `context` lookup with `search_combined`
-  into one deduplicated response (`exchange_core` / `specific_context` /
-  `verbatim_ref`). `--file` and `--branch` are independent AND filters.
-  Ranking applies an opt-in exponential recency decay
-  (`search_combined(..., recency_half_life_days=)`, default half-life 14 days
-  on `loci recall` only; existing `search()`/`context()` ranking is unchanged)
-  using `code_edges.ts` with `conversations.started_at` as fallback.
+- `loci recall` (issue #33, redesigned) is a resume-style session browser,
+  not an exchange-level merge. `loci recall` (bare) lists sessions newest
+  first; `loci recall "query"` ranks sessions by relevance (exchange-level
+  BM25(V)+HNSW(D) RRF scores aggregated to `session_id` by max, so a long
+  session can't out-rank a strong single hit on exchange count alone);
+  `loci recall --session ID` returns that session's digest — `exchange_core`
+  (the distilled one-line decision) per exchange in ply order, not full
+  transcripts; `--full` adds `specific_context`/`user_content`/`agent_content`
+  per line. `--file`/`--branch` are independent AND filters on either list
+  mode. Keyword-mode recency decay now defaults OFF (`--recency-half-life 0`)
+  so today's session can't bury older relevant ones by recency alone —
+  the flat 0.10 semantic confidence that caused this in the old merge is
+  gone along with the merge itself.
 
 - `loci gc` (issue #30) snapshots the database, removes only orphaned
   palace/vector and exchange/session records, retains bounded `.bak` archives,
@@ -57,6 +62,25 @@
   both install (no clobber) and uninstall (no delete).
 
 ### Fixed
+- Distillation and indexing now reject session-log paths that resolve
+  outside the project root, so a crafted tool-use path cannot make
+  `loci distill` read arbitrary local files.
+- `loci init` appends `.lociaction/` to the project `.gitignore` when
+  missing, so the local memory database is not staged by a bulk commit.
+- Sensitive-file redaction now treats any tool-use `file_path` /
+  `notebook_path` as a touched path and canonicalizes relative paths
+  before matching `.lociaction/ignore`.
+- `.lociaction/ignore` drops overlong or wildcard-heavy rules instead of
+  compiling them into unbounded backtracking regexes.
+- `SymbolResolver` returns no symbols for a pathologically deep AST
+  instead of aborting ingest/distill with `RecursionError`.
+- Unified-diff hunk coordinates that are too large to convert safely are
+  skipped instead of crashing `loci index`.
+- Session-log JSONL loaders bound per-line bytes, aggregate bytes, and
+  retained entries so an adversarial log cannot exhaust memory.
+- `distill.base_url` must be `http`/`https` with a host and no userinfo.
+- Plain-text `show`/`dump`/`search`/`context`/`recall` output strips
+  terminal control sequences from stored session content.
 
 - `loci search`'s KNN→filter ordering and branch matching (issue #18):
   - `search_hnsw_palace` cut the sqlite-vec KNN candidate pool to exactly

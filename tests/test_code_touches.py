@@ -10,13 +10,16 @@ from lociaction.code_touches import (
     normalize_touched_paths,
     touches_to_edges,
 )
+from lociaction.distiller import _is_external_path
 from lociaction.models import CodeTouch, FileOnly, LineRange, TextAnchor
 from lociaction.resolver import Symbol
 from lociaction.utils import sha256
 
 
-def test_normalize_touched_paths_passes_relative_paths_through() -> None:
-    result = normalize_touched_paths(["src/foo.py", "src/bar.py"], "/Users/x/repo")
+def test_normalize_touched_paths_canonicalizes_relative_paths() -> None:
+    result = normalize_touched_paths(
+        ["src/dir/../foo.py", "src/bar.py"], "/Users/x/repo"
+    )
     assert result == ["src/foo.py", "src/bar.py"]
 
 
@@ -53,9 +56,9 @@ def test_normalize_repo_path_project_root_itself_returns_none() -> None:
     assert result is None
 
 
-def test_normalize_repo_path_relative_input_returns_none() -> None:
-    result = normalize_repo_path("src/db.py", "/Users/x/repo")
-    assert result is None
+def test_normalize_repo_path_relative_input_returns_canonical_relative_path() -> None:
+    result = normalize_repo_path("src/dir/../db.py", "/Users/x/repo")
+    assert result == "src/db.py"
 
 
 def test_normalize_repo_path_trailing_slash_on_root_is_tolerated() -> None:
@@ -83,6 +86,31 @@ def test_normalize_repo_path_resolves_equivalent_symlink_paths(tmp_path: Path) -
 def test_normalize_repo_path_dotdot_escaping_root_returns_none() -> None:
     result = normalize_repo_path("/Users/x/repo/../secrets/foo.py", "/Users/x/repo")
     assert result is None
+
+def test_normalize_repo_path_relative_dotdot_escaping_root_returns_none() -> None:
+    result = normalize_repo_path("../secrets/foo.py", "/Users/x/repo")
+    assert result is None
+
+
+def test_normalize_repo_path_relative_symlink_escape_returns_none(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    external_file = tmp_path / "secret.py"
+    external_file.write_text("secret = True\n")
+    (project_root / "linked.py").symlink_to(external_file)
+
+    result = normalize_repo_path("linked.py", str(project_root))
+
+    assert result is None
+
+
+def test_distillation_guard_rejects_relative_escape_when_root_is_known(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    assert _is_external_path("../secrets/foo.py", str(project_root)) is True
 
 
 def test_normalize_repo_path_excludes_venv() -> None:

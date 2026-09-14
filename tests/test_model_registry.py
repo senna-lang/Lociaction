@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from lociaction.adapters.model.registry import (
     _ollama_model_pulled,
     check_ready,
@@ -436,6 +438,55 @@ def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
     assert "provider" not in content
 
 
+def test_write_client_config_rejects_symlinked_config_file(tmp_path) -> None:
+    """setup が project state 内の leaf symlink target を上書きしない。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    target = tmp_path / "outside.toml"
+    target.write_text("sentinel\n")
+    config_path = tmp_path / "config.toml"
+    config_path.symlink_to(target)
+    client = ModelClient(
+        id="ollama-ft",
+        provider="openai",
+        model="model",
+        base_url="http://localhost:11434/v1",
+        label="Ollama",
+    )
+
+    try:
+        write_client_config(config_path, client)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected symlinked config to be rejected")
+
+    assert target.read_text() == "sentinel\n"
+
+
+def test_write_client_config_rejects_oversized_existing_config(tmp_path) -> None:
+    """setup は既存の attacker-controlled config を無制限に tomllib へ渡さない
+    （LOCI-REGISTRY-UNBOUNDED-CONFIG-01）。"""
+    from lociaction.adapters.model.types import ModelClient
+    from lociaction.config import MAX_CONFIG_FILE_BYTES
+
+    config_path = tmp_path / "config.toml"
+    original = b"x" * (MAX_CONFIG_FILE_BYTES + 1)
+    config_path.write_bytes(original)
+    client = ModelClient(
+        id="ollama-ft",
+        provider="openai",
+        model="model",
+        base_url="http://localhost:11434/v1",
+        label="Ollama",
+    )
+
+    with pytest.raises(ValueError, match="exceeds"):
+        write_client_config(config_path, client)
+
+    assert config_path.read_bytes() == original
+
+
 def test_write_client_config_omits_model_key_when_none(tmp_path) -> None:
     """codex-cli/gemini-cli は model=None を許容する — TOML に `model = None` を
     書こうとすると tomli_w が壊れるので、鍵ごと省略されることを確認する。"""
@@ -515,6 +566,77 @@ def test_write_client_config_preserves_index_min_chars(tmp_path) -> None:
     assert "min_chars = 200" in content
 
 
+def test_write_client_config_rejects_non_integer_index_min_chars(tmp_path) -> None:
+    """[index].min_chars が未検証の TOML 由来の場合、tomli_w に通らない値は
+    そのまま f-string へ埋め込まず、コメントアウトされたデフォルトへ落とす
+    (LOCI-REGISTRY-TOML-INJECT-INDEX)。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[distill]\nprovider = "claude"\n\n[index]\n'
+        'min_chars = """\\ninjected = "evil"\\n"""\n'
+    )
+    client = ModelClient(
+        id="claude-cli",
+        provider="claude",
+        model="claude-haiku-4-5-20251001",
+        base_url=None,
+        label="Claude CLI",
+    )
+
+    write_client_config(config_path, client)
+
+    content = config_path.read_text()
+    assert "injected" not in content
+    import tomllib
+
+    parsed = tomllib.loads(content)
+    assert "injected" not in parsed
+
+
+
+
+def test_write_client_config_ignores_malformed_distill_section(tmp_path) -> None:
+    """[distill] が scalar/array のような非テーブル値でもクラッシュしない
+    (LOCI-REGISTRY-MALFORMED-SECTION-CRASH-01)。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('distill = "not-a-table"\n')
+    client = ModelClient(
+        id="claude-cli",
+        provider="claude",
+        model="claude-haiku-4-5-20251001",
+        base_url=None,
+        label="Claude CLI",
+    )
+
+    write_client_config(config_path, client)
+
+    assert 'client = "claude-cli"' in config_path.read_text()
+
+
+def test_write_client_config_ignores_malformed_index_section(tmp_path) -> None:
+    """[index] が scalar/array のような非テーブル値でもクラッシュしない
+    (LOCI-REGISTRY-MALFORMED-SECTION-CRASH-01)。"""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('index = ["not", "a", "table"]\n')
+    client = ModelClient(
+        id="claude-cli",
+        provider="claude",
+        model="claude-haiku-4-5-20251001",
+        base_url=None,
+        label="Claude CLI",
+    )
+
+    write_client_config(config_path, client)
+
+    content = config_path.read_text()
+    assert 'client = "claude-cli"' in content
+    assert "min_chars = 50" in content
 
 # ---- _ollama_model_pulled: NAME 列の完全一致 (#26) ----
 

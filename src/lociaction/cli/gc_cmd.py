@@ -18,8 +18,9 @@ def gc() -> None:
     root = find_project_root()
     db = db_path(root)
     if not db.exists():
-        typer.echo("Not initialized. Run `loci init` first.", err=True)
-        raise typer.Exit(1)
+        from lociaction.cli.errors import abort_not_initialized
+
+        abort_not_initialized()
 
     init_db(db)
     result = collect_garbage(db)

@@ -43,6 +43,26 @@ Each result also carries a `context` array — related exchanges lociaction foun
 loci context --branch "feature/foo" --json
 ```
 
+### Session start — resume past sessions
+
+At session start, before reaching for `context`/`search`, get oriented with `loci recall`. It browses whole past sessions instead of individual exchanges — closer to a coding-agent `resume` than a search: run it bare for the newest sessions, or with a keyword to rank sessions by relevance instead of recency. Pick a `session_id` from the list and pull its digest — a compact list of one-line decisions (`exchange_core` per exchange), not full transcripts.
+
+```bash
+# What have I been doing lately? (newest sessions first)
+loci recall --json
+
+# Which past sessions covered a topic? (ranked by relevance, not recency)
+loci recall "grouped-query-attention" --json
+
+# Pull the digest for one of the listed sessions (session_id from the list above)
+loci recall --session <session_id> --json
+
+# Either mode: filter to sessions that touched a file and/or branch
+loci recall --file src/lociaction/search.py --branch "feature/foo" --json
+```
+
+Prefer `context`/`search` when you already know the file, symbol, or question — `recall` is for "what have I been doing," not pinpoint lookups.
+
 ### IDE selection as a deictic anchor
 
 When the IDE injects an active editor selection (shown as `⧉ Selected N lines from <file>`), treat that selection as the referent of "this / これ / この〜" in the user's prompt. The selection resolves *which* code the memory lookup is about — it is NOT by itself a request to recall.
@@ -80,7 +100,9 @@ loci search "BM25 RRF fusion ranking" --json --limit 5
 loci show "<exchange_id>" --json
 ```
 
-`loci show` also returns the same `context` array (ply-adjacent neighbors). Chain calls on the `exchange_id` values inside it to walk further back or forward — there's no separate window-size flag, each call just re-centers on whatever exchange_id you pass.\
+`loci show` also returns the same `context` array (ply-adjacent neighbors). Chain calls on the `exchange_id` values inside it to walk further back or forward — there's no separate window-size flag, each call just re-centers on whatever exchange_id you pass.
+
+Session transcripts may contain credentials, private source code, paths, or personal data. Do not paste `loci show` or `loci dump` output into chat, issues, commits, or logs without reviewing and redacting it.\
 """
 
 AGENTS_MD_SECTION = f"""\
@@ -95,12 +117,12 @@ instructions are not already in context.
 
 
 def prime() -> None:
-    """エージェント向けインストラクションを stdout に出力する。
+    """Print agent instructions to stdout.
 
     SessionStart integration sends these instructions to the agent context.
     AGENTS.md provides the harness-independent durable reminder.
-    未初期化プロジェクト（.lociaction/ なし）では hook を無音で抜ける。
-    エージェントのコンテキストや stderr を汚さないため。
+    Uninitialized projects (no `.lociaction/`) return silently so hooks do not
+    pollute agent context or stderr.
     """
     from lociaction.paths import LOCIACTION_DIR, find_project_root
 
@@ -118,6 +140,9 @@ def inject_agents_md(project_root: Path) -> bool:
     ファイルを一切変更せずに False を返す。
     """
     agents_md = project_root / "AGENTS.md"
+    if agents_md.is_symlink():
+        typer.echo(f"⚠ refusing symlinked AGENTS.md: {agents_md}", err=True)
+        return False
 
     if agents_md.exists():
         content = agents_md.read_text()
