@@ -23,7 +23,7 @@ def _print_client_list(statuses, recommended: str | None) -> None:
 
 
 def prompt_client_selection(root) -> ModelClient | None:
-    """(ollama-ft の drafter 自動追加) → discover → setup offer → Ready 一覧 → 選択。
+    """discover → setup offer → Ready 一覧 → 選択。
 
     config は書き換えず ModelClient を返すだけ（runtime reselect は once — save は
     `loci distill --setup` のみ）。
@@ -34,17 +34,8 @@ def prompt_client_selection(root) -> ModelClient | None:
         recommended_id,
         resolve_client,
         setup,
-        upgrade_ollama_ft_drafter_if_missing,
     )
     from lociaction.config import load_config
-
-    # 既存ユーザーが生の FT 本体のまま ready なら、対話 context に限り
-    # drafter を自動で追加する（設計: FTモデル使用時は自動で drafter を
-    # 付ける）。ready でない/既に drafter 済みなら None で何もしない。
-    upgrade = upgrade_ollama_ft_drafter_if_missing()
-    if upgrade is not None:
-        _, upgrade_msg = upgrade
-        typer.echo(upgrade_msg)
 
     statuses = discover()
     for s in statuses:
@@ -89,12 +80,6 @@ def _resolve_backend(cfg, root, is_tty: bool):
 
     unconfigured/not-ready のとき: TTY なら一度限りの再選択（config は書かない）、
     非対話なら None を返し呼び出し側が warn+skip する（silent auto-switch 禁止）。
-
-    ready かつ ollama-ft かつ対話実行なら、drafter 未追加の既存ユーザーを
-    自動で drafter 付きへ移行し config.toml も書き換える（silent switch では
-    なく、同一モデル・同一出力のまま高速化するだけの additive な変更）。
-    非対話（hook 実行）ではネットワーク越しの `ollama pull` を伴いうるこの
-    移行を一切試みない。
     """
     from lociaction.adapters.model.registry import check_ready
     from lociaction.llm import DistillBackend, DistillUnconfiguredError
@@ -123,23 +108,6 @@ def _resolve_backend(cfg, root, is_tty: bool):
     assert cfg.distill_client is not None  # from_config succeeded => configured
     status = check_ready(cfg.distill_client)
     if status.state == "ready":
-        if is_tty and cfg.distill_client == "ollama-ft":
-            from lociaction.adapters.model.registry import (
-                upgrade_ollama_ft_drafter_if_missing,
-                write_client_config,
-            )
-            from lociaction.paths import lociaction_dir
-
-            upgrade = upgrade_ollama_ft_drafter_if_missing()
-            if upgrade is not None:
-                ok, msg = upgrade
-                typer.echo(msg)
-                if ok:
-                    upgraded_status = check_ready("ollama-ft")
-                    if upgraded_status.client is not None:
-                        config_path = lociaction_dir(root) / "config.toml"
-                        write_client_config(config_path, upgraded_status.client)
-                        backend = _from_client(upgraded_status.client)
         return backend
 
     if not is_tty:

@@ -53,14 +53,6 @@ VALID_DISTILL_CLIENT_IDS = frozenset(
 LOCAL_DISTILL_MODEL = "hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M"
 LOCAL_DISTILL_BASE_URL = "http://localhost:11434/v1"
 
-# speculative decoding の drafter。7B 本体 (LOCAL_DISTILL_MODEL) の出力は
-# greedy のまま変えず、生成速度だけを上げる小型モデル。`ollama-ft` の setup 時、
-# 本体 + drafter を Modelfile で結合した LOCAL_DISTILL_DRAFTER_MODEL を自動で
-# 作成し、以後の蒸留呼び出しはこちらを使う。
-LOCAL_DISTILL_DRAFT_MODEL = "qwen2.5:0.5b"
-LOCAL_DISTILL_DRAFTER_MODEL = "loci-distiller"
-LOCAL_DISTILL_DRAFT_NUM_PREDICT = 4
-
 # project-local config.toml だけでは蒸留内容の送信先をリモートへ変更できない。
 # リモート OpenAI 互換 endpoint は、呼び出すユーザーが environment で origin を許可する。
 REMOTE_DISTILL_ORIGINS_ENV = "LOCIACTION_REMOTE_DISTILL_ORIGINS"

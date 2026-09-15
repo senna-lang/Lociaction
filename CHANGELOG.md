@@ -2,26 +2,34 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-15
+
+### Fixed
+- Reverted the automatic speculative-decoding drafter for `ollama-ft`
+  added in 0.5.0 (issue #1). Ollama's `DRAFT` Modelfile instruction
+  requires a local filesystem path to draft-model weights, not a
+  registry tag, so `ollama create loci-distiller` always failed with
+  `stat ...: no such file or directory`. Worse, `DRAFT`/MTP speculative
+  decoding only works when the `FROM` base model itself contains MTP
+  (multi-token-prediction) layers baked into its weights; the community
+  fine-tune this project bundles (`qwen2.5-7b-memory-distiller`) is a
+  standard fine-tune with none, so even a corrected Modelfile path fails
+  at inference (`context type MTP requested but model doesn't contain
+  MTP layers`). The pairing cannot work against this base model as
+  designed, so it is removed rather than patched. `ollama-ft` behaves
+  exactly as it did before 0.5.0: it pulls and uses
+  `hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M` directly,
+  with no drafter. No user action is required — the 0.5.0 setup/upgrade
+  path always failed cleanly (falling back to the raw model, per its own
+  error handling) and never left a broken `loci-distiller` model behind.
+
 ## [0.5.0] - 2026-09-14
 
 ### Added
-- `ollama-ft` now automatically pairs the fine-tuned distillation model
-  with a speculative-decoding drafter (`qwen2.5:0.5b`, `draft_num_predict
-  4`), combined into a local `loci-distiller` Ollama model. `loci init`
-  and `loci distill --setup` create it automatically on first setup
-  (pulling both models, then `ollama create`); output stays deterministic
-  (greedy) since the drafter only speeds up generation, it never changes
-  what the base model would have produced.
-- Existing `ollama-ft` users already configured with the raw fine-tuned
-  model name are upgraded to the drafter-enabled model automatically the
-  next time they run `loci init`, `loci distill --setup`, or an
-  interactive `loci distill` — `config.toml` is rewritten once the
-  drafter is created. This upgrade is attempted only in interactive
-  contexts; non-interactive (hook-triggered) `loci distill` runs never
-  attempt it, so automated distillation never silently starts a network
-  `ollama pull`. Until upgraded, existing configurations keep working
-  unchanged on the raw model.
-
+- `ollama-ft` paired the fine-tuned distillation model with a
+  speculative-decoding drafter (`qwen2.5:0.5b`), combined into a local
+  `loci-distiller` Ollama model. **Reverted in 0.5.1** — see its entry
+  for why this never worked in practice.
 
 ## [0.4.0] - 2026-09-14
 

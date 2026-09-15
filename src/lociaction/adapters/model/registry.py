@@ -9,17 +9,12 @@ silent fallback 禁止: discover() は「今 Ready なもの」だけを返す�
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
-import tempfile
 
 from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.config import (
     LOCAL_DISTILL_BASE_URL,
-    LOCAL_DISTILL_DRAFT_MODEL,
-    LOCAL_DISTILL_DRAFT_NUM_PREDICT,
-    LOCAL_DISTILL_DRAFTER_MODEL,
     LOCAL_DISTILL_MODEL,
     MAX_CONFIG_FILE_BYTES,
 )
@@ -41,12 +36,6 @@ def _ollama_model_pulled(model: str) -> bool:
 
     部分一致だと `qwen2.5-7b` が `qwen2.5-7b-instruct` に誤ヒットするため、
     各行の先頭列（NAME、空白区切り）のみを比較する。1行目はヘッダなのでスキップ。
-
-    `model` がタグ無し（`:` を含まない）場合は `ollama create`/`pull` が
-    暗黙で付与する `:latest` も許可する。`loci-distiller` を `ollama create`
-    すると `ollama list` には `loci-distiller:latest` として現れるため、
-    タグ無し参照はこの暗黙タグを認識できないと常に setupable のまま誤判定する。
-    タグ付き名（`hf.co/...:Q4_K_M` 等）は従来通り完全一致のみ。
     """
     try:
         result = subprocess.run(
@@ -58,23 +47,11 @@ def _ollama_model_pulled(model: str) -> bool:
         return False
     lines = result.stdout.splitlines()[1:]  # ヘッダ行 "NAME ..." を除く
     names = {line.split()[0] for line in lines if line.split()}
-    if model in names:
-        return True
-    if ":" not in model:
-        return f"{model}:latest" in names
-    return False
+    return model in names
 
 
 def detect_ollama_ft() -> ClientStatus:
-    """Ollama binary + FT本体 + drafter(loci-distiller) の状態を確認する。
-
-    drafter モデル作成済みなら ready で、以後の新規セットアップはこちらを
-    優先する。FT本体だけ pull 済み（drafter 未作成）でも ready のままにする
-    ——既存 config.toml が既に `model = "<生のFTモデル名>"` を明示している
-    ユーザーの `loci distill` を「not ready」扱いにして自動蒸留を止めない
-    ため（drafter はあくまで新規セットアップ時の任意の高速化であり、
-    既存の動作する設定を壊してはならない）。どちらも無ければ setupable。
-    """
+    """Ollama binary + FT model の pull 状態を確認する"""
     if shutil.which("ollama") is None:
         return ClientStatus(
             id="ollama-ft",
@@ -82,40 +59,25 @@ def detect_ollama_ft() -> ClientStatus:
             state="unavailable",
             reason="ollama binary not found in PATH",
         )
-    if _ollama_model_pulled(LOCAL_DISTILL_DRAFTER_MODEL):
+    if not _ollama_model_pulled(LOCAL_DISTILL_MODEL):
         return ClientStatus(
             id="ollama-ft",
             label="Ollama (local FT model)",
-            state="ready",
-            reason="ready",
-            client=ModelClient(
-                id="ollama-ft",
-                provider="openai",
-                model=LOCAL_DISTILL_DRAFTER_MODEL,
-                base_url=LOCAL_DISTILL_BASE_URL,
-                label="Ollama (local FT model)",
-            ),
-        )
-    if _ollama_model_pulled(LOCAL_DISTILL_MODEL):
-        return ClientStatus(
-            id="ollama-ft",
-            label="Ollama (local FT model)",
-            state="ready",
-            reason="ready (no speculative-decoding drafter; run "
-            "`loci distill --setup` to add one)",
-            client=ModelClient(
-                id="ollama-ft",
-                provider="openai",
-                model=LOCAL_DISTILL_MODEL,
-                base_url=LOCAL_DISTILL_BASE_URL,
-                label="Ollama (local FT model)",
-            ),
+            state="setupable",
+            reason=f"model not pulled: {LOCAL_DISTILL_MODEL}",
         )
     return ClientStatus(
         id="ollama-ft",
         label="Ollama (local FT model)",
-        state="setupable",
-        reason=f"model not pulled: {LOCAL_DISTILL_MODEL}",
+        state="ready",
+        reason="ready",
+        client=ModelClient(
+            id="ollama-ft",
+            provider="openai",
+            model=LOCAL_DISTILL_MODEL,
+            base_url=LOCAL_DISTILL_BASE_URL,
+            label="Ollama (local FT model)",
+        ),
     )
 
 
@@ -296,60 +258,8 @@ def recommended_id(statuses: list[ClientStatus]) -> str | None:
     return ready[0].id
 
 
-def _ollama_pull(model: str) -> tuple[bool, str] | None:
-    """`ollama pull` を実行する。既に pull 済みなら None を返し呼び出し側に
-    スキップさせる（無駄な再ダウンロード確認を避ける）。"""
-    if _ollama_model_pulled(model):
-        return None
-    try:
-        result = subprocess.run(
-            ["ollama", "pull", model],
-            capture_output=True,
-            text=True,
-            timeout=1800,
-        )
-    except (subprocess.SubprocessError, OSError) as e:
-        return False, f"ollama pull failed ({model}): {e}"
-    if result.returncode != 0:
-        return False, f"ollama pull failed ({model}): {result.stderr.strip()}"
-    return True, f"pulled {model}"
-
-
-def _create_drafter_model() -> tuple[bool, str]:
-    """FT 本体 (LOCAL_DISTILL_MODEL) + speculative decoding drafter
-    (LOCAL_DISTILL_DRAFT_MODEL) を結合した LOCAL_DISTILL_DRAFTER_MODEL を
-    `ollama create` で作る。drafter は本体の出力（greedy）を変えず、生成速度
-    だけを上げる。"""
-    modelfile = (
-        f"FROM {LOCAL_DISTILL_MODEL}\n"
-        f"DRAFT {LOCAL_DISTILL_DRAFT_MODEL}\n"
-        f"PARAMETER draft_num_predict {LOCAL_DISTILL_DRAFT_NUM_PREDICT}\n"
-    )
-    fd, modelfile_path = tempfile.mkstemp(suffix=".Modelfile", text=True)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(modelfile)
-        result = subprocess.run(
-            ["ollama", "create", LOCAL_DISTILL_DRAFTER_MODEL, "-f", modelfile_path],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except (subprocess.SubprocessError, OSError) as e:
-        return False, f"ollama create failed: {e}"
-    finally:
-        os.unlink(modelfile_path)
-    if result.returncode != 0:
-        return False, f"ollama create failed: {result.stderr.strip()}"
-    return True, (
-        f"created {LOCAL_DISTILL_DRAFTER_MODEL} "
-        f"(drafter: {LOCAL_DISTILL_DRAFT_MODEL})"
-    )
-
-
 def setup(client_id: str) -> tuple[bool, str]:
-    """setupable な client を Ready にする。ollama-ft は FT本体 + drafter を
-    pull し、両者を結合した drafter-enabled モデルを `ollama create` する。
+    """setupable な client を Ready にする（今は ollama-ft の `ollama pull` のみ）。
 
     binary 自体のインストールは実行しない — 案内のみ（D6）。
     """
@@ -360,29 +270,18 @@ def setup(client_id: str) -> tuple[bool, str]:
             "ollama binary not found — install from "
             "https://ollama.com then retry"
         )
-    for model in (LOCAL_DISTILL_MODEL, LOCAL_DISTILL_DRAFT_MODEL):
-        pull_result = _ollama_pull(model)
-        if pull_result is not None and not pull_result[0]:
-            return pull_result
-    return _create_drafter_model()
-
-
-def upgrade_ollama_ft_drafter_if_missing() -> tuple[bool, str] | None:
-    """既存ユーザー（`ollama-ft` が生の FT 本体のまま ready）に drafter を
-    自動で追加する。ollama-ft が ready でない、または既に drafter 済みなら
-    None を返し何もしない（既存 config を無条件に触らないための境界）。
-
-    呼び出し側は interactive context（`loci init`/`loci distill --setup`/
-    対話的な `loci distill`）でのみこれを呼ぶこと——ネットワーク越しの
-    `ollama pull` を伴いうるため、非対話の hook 実行から呼ぶと自動化が
-    無言でモデルを取得し始めてしまう。
-    """
-    status = detect_ollama_ft()
-    if status.state != "ready" or status.client is None:
-        return None
-    if status.client.model != LOCAL_DISTILL_MODEL:
-        return None
-    return setup("ollama-ft")
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", LOCAL_DISTILL_MODEL],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"ollama pull failed: {e}"
+    if result.returncode != 0:
+        return False, f"ollama pull failed: {result.stderr.strip()}"
+    return True, f"pulled {LOCAL_DISTILL_MODEL}"
 
 
 def resolve_client(client_id: str, cfg) -> ModelClient:
@@ -402,7 +301,7 @@ def resolve_client(client_id: str, cfg) -> ModelClient:
         return ModelClient(
             id="ollama-ft",
             provider="openai",
-            model=cfg.distill_model or LOCAL_DISTILL_DRAFTER_MODEL,
+            model=cfg.distill_model or LOCAL_DISTILL_MODEL,
             base_url=cfg.distill_base_url or LOCAL_DISTILL_BASE_URL,
             label="Ollama (local FT model)",
         )
