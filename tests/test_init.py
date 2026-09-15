@@ -21,7 +21,7 @@ def _isolate_home(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_distill_clients_by_default(monkeypatch):
-    """discover() が実機の ollama/claude を拾わないよう、既定で両方 unavailable にする。
+    """discover() が実機の llama-server/claude を拾わないよう、既定で両方 unavailable にする。
     distill client 選択フローを検証するテストは discover/check_ready を個別に monkeypatch する。
     """
     from lociaction.adapters.model.types import ClientStatus
@@ -29,8 +29,8 @@ def _no_distill_clients_by_default(monkeypatch):
     def _fake_discover():
         return [
             ClientStatus(
-                id="ollama-ft",
-                label="Ollama (local FT model)",
+                id="llamacpp-ft",
+                label="llama.cpp (local FT + speculative decoding)",
                 state="unavailable",
                 reason="test default",
             ),
@@ -43,7 +43,6 @@ def _no_distill_clients_by_default(monkeypatch):
         ]
 
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
-
 
 def _create_jsonl(
     path: Path,
@@ -971,14 +970,14 @@ def test_init_no_ready_client_leaves_distill_unconfigured(tmp_path, monkeypatch)
     assert '\nclient = "' not in config
 
 
-def _patch_setupable_ollama_only(monkeypatch):
+def _patch_setupable_llamacpp_only(monkeypatch):
     from lociaction.adapters.model.types import ClientStatus
 
     def _fake_discover():
         return [
             ClientStatus(
-                id="ollama-ft",
-                label="Ollama (local FT model)",
+                id="llamacpp-ft",
+                label="llama.cpp (local FT + speculative decoding)",
                 state="setupable",
                 reason="model not pulled",
             ),
@@ -993,34 +992,34 @@ def _patch_setupable_ollama_only(monkeypatch):
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
-def test_init_setupable_ollama_declined_leaves_unconfigured(tmp_path, monkeypatch):
+def test_init_setupable_llamacpp_declined_leaves_unconfigured(tmp_path, monkeypatch):
     """setup offer を断ると Ready 0件のまま unconfigured で init が成功する"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
-    _patch_setupable_ollama_only(monkeypatch)
+    _patch_setupable_llamacpp_only(monkeypatch)
 
     result = runner.invoke(app, ["init"], input="n\n")
     assert result.exit_code == 0
-    assert "Set up Ollama" in result.output
+    assert "Set up llama.cpp" in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert '\nclient = "' not in config
 
 
-def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
+def test_init_setupable_llamacpp_accepted_writes_config(tmp_path, monkeypatch):
     """setup offer を承諾し setup() が成功すると Ready 化した client が config に書かれる"""
     from lociaction.adapters.model.types import ClientStatus, ModelClient
-    from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
+    from lociaction.config import LOCAL_DISTILL_MODEL
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
 
     ready_client = ModelClient(
-        id="ollama-ft",
+        id="llamacpp-ft",
         provider="openai",
         model=LOCAL_DISTILL_MODEL,
-        base_url=LOCAL_DISTILL_BASE_URL,
-        label="Ollama (local FT model)",
+        base_url=None,
+        label="llama.cpp (local FT + speculative decoding)",
     )
     call_count = {"n": 0}
 
@@ -1029,16 +1028,16 @@ def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
         if call_count["n"] == 1:
             return [
                 ClientStatus(
-                    id="ollama-ft",
-                    label="Ollama (local FT model)",
+                    id="llamacpp-ft",
+                    label="llama.cpp (local FT + speculative decoding)",
                     state="setupable",
                     reason="model not pulled",
                 )
             ]
         return [
             ClientStatus(
-                id="ollama-ft",
-                label="Ollama (local FT model)",
+                id="llamacpp-ft",
+                label="llama.cpp (local FT + speculative decoding)",
                 state="ready",
                 reason="ready",
                 client=ready_client,
@@ -1056,23 +1055,24 @@ def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["init"], input="y\n\n")
     assert result.exit_code == 0
-    assert setup_calls == ["ollama-ft"]
+    assert setup_calls == ["llamacpp-ft"]
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
-    assert 'client = "ollama-ft"' in config
+    assert 'client = "llamacpp-ft"' in config
     assert f'model = "{LOCAL_DISTILL_MODEL}"' in config
-    assert f'base_url = "{LOCAL_DISTILL_BASE_URL}"' in config
+    assert "base_url" not in config
 
 
 def _patch_both_ready(monkeypatch):
     from lociaction.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.config import LOCAL_DISTILL_MODEL
 
-    ollama_client = ModelClient(
-        id="ollama-ft",
+    llamacpp_client = ModelClient(
+        id="llamacpp-ft",
         provider="openai",
-        model="hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M",
-        base_url="http://localhost:11434/v1",
-        label="Ollama (local FT model)",
+        model=LOCAL_DISTILL_MODEL,
+        base_url=None,
+        label="llama.cpp (local FT + speculative decoding)",
     )
     claude_client = ModelClient(
         id="claude-cli",
@@ -1085,11 +1085,11 @@ def _patch_both_ready(monkeypatch):
     def _fake_discover():
         return [
             ClientStatus(
-                id="ollama-ft",
-                label="Ollama (local FT model)",
+                id="llamacpp-ft",
+                label="llama.cpp (local FT + speculative decoding)",
                 state="ready",
                 reason="ready",
-                client=ollama_client,
+                client=llamacpp_client,
             ),
             ClientStatus(
                 id="claude-cli",
@@ -1103,8 +1103,8 @@ def _patch_both_ready(monkeypatch):
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
-def test_init_ready_clients_default_selection_is_ollama_ft(tmp_path, monkeypatch):
-    """両方 Ready のとき ollama-ft が recommended default で、空 Enter で選ばれる"""
+def test_init_ready_clients_default_selection_is_llamacpp_ft(tmp_path, monkeypatch):
+    """両方 Ready のとき llamacpp-ft が recommended default で、空 Enter で選ばれる"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     _patch_both_ready(monkeypatch)
@@ -1114,7 +1114,7 @@ def test_init_ready_clients_default_selection_is_ollama_ft(tmp_path, monkeypatch
     assert "(recommended)" in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
-    assert 'client = "ollama-ft"' in config
+    assert 'client = "llamacpp-ft"' in config
 
 
 def test_init_select_claude_cli_from_ready_list(tmp_path, monkeypatch):
@@ -1131,10 +1131,10 @@ def test_init_select_claude_cli_from_ready_list(tmp_path, monkeypatch):
 
 
 def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
-    """--no-local-distiller は setupable な ollama-ft の setup offer だけをスキップする"""
+    """--no-local-distiller は setupable な llamacpp-ft の setup offer だけをスキップする"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
-    _patch_setupable_ollama_only(monkeypatch)
+    _patch_setupable_llamacpp_only(monkeypatch)
 
     setup_called = []
     monkeypatch.setattr(
@@ -1145,7 +1145,7 @@ def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
     assert setup_called == []
-    assert "Set up Ollama" not in result.output
+    assert "Set up llama.cpp" not in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert '\nclient = "' not in config
@@ -1250,22 +1250,21 @@ def test_init_distill_client_flag_not_ready_errors_without_fallback(
     monkeypatch.setattr(
         "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
-            id="ollama-ft",
-            label="Ollama (local FT model)",
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
             state="unavailable",
-            reason="ollama binary not found in PATH",
+            reason="llama-server binary not found in PATH",
         ),
     )
 
-    result = runner.invoke(app, ["init", "--distill-client", "ollama-ft"])
+    result = runner.invoke(app, ["init", "--distill-client", "llamacpp-ft"])
     assert result.exit_code == 1
     assert not (tmp_path / ".lociaction" / "memory.db").exists()
 
 
 def test_init_distill_client_flag_accepts_codex_cli(tmp_path, monkeypatch):
-    """回帰テスト: --distill-client の allowlist が ollama-ft/claude-cli に
-    ハードコードされていた頃は codex-cli/gemini-cli/grok-cli/opencode-cli/omp-cli
-    が誤って「Unknown distill client」で拒否されていた。DISCOVERABLE_CLIENT_IDS
+    """回帰テスト: --distill-client の allowlist が一部 id にハードコードされていた頃は
+    他 CLI が誤って「Unknown distill client」で拒否されていた。DISCOVERABLE_CLIENT_IDS
     を参照するようになったことを確認する。"""
     from lociaction.adapters.model.types import ClientStatus, ModelClient
 

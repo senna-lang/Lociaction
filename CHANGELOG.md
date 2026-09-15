@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-15
+
+### Added
+- `llamacpp-ft` distill client: ephemeral `llama-server --model-draft`
+  for classic speculative decoding on the bundled GGUF fine-tune.
+  Ollama's `DRAFT` Modelfile path (the 0.5.0 attempt, reverted in 0.5.1)
+  cannot accelerate this model — it is safetensors/MTP-only. The new
+  backend resolves Ollama GGUF blobs from local manifests, starts
+  `llama-server` on a loopback port for one `loci distill` batch, and
+  stops it afterwards. Requires `llama-server` on `PATH` or
+  `LOCI_LLAMACPP_SERVER`. Draft model defaults to `qwen2.5:0.5b`; set
+  `LOCI_LLAMACPP_DRAFT_MODEL=` to opt out. GPU offload is not forced
+  (`LOCI_LLAMACPP_GPU_LAYERS` / `LOCI_LLAMACPP_DRAFT_GPU_LAYERS` to
+  override). Selection/setup stays TTY-gated; a configured client may
+  run from a hook without downloading. `loci init` / `loci distill --setup`
+  recommend `llamacpp-ft` when it is Ready.
+
+### Removed
+- `ollama-ft` distill client. Ollama remains the GGUF blob source
+  (`ollama pull`); talking to Ollama's HTTP API is `openai-compat`.
+
 ## [0.5.1] - 2026-09-15
 
 ### Fixed

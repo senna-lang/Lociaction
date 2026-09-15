@@ -199,9 +199,9 @@ def init(
         typer.Option(
             "--distill-client",
             help=(
-                "Select a distill client non-interactively (ollama-ft | claude-cli | "
-                "codex-cli | gemini-cli | grok-cli | opencode-cli | omp-cli). "
-                "Exits with an error if that client is not ready"
+                "Select a distill client non-interactively (llamacpp-ft | "
+                "claude-cli | codex-cli | gemini-cli | grok-cli | opencode-cli | "
+                "omp-cli). Exits with an error if that client is not ready"
             ),
         ),
     ] = None,
@@ -354,7 +354,7 @@ def init(
                             "# distill client が未設定です。次のコマンドで選択してください:\n"
                             "#   loci distill --setup\n"
                             "#\n"
-                            '# client = "ollama-ft"       # ローカル FT モデル（Ollama）\n'
+                            '# client = "llamacpp-ft"     # llama-server + speculative decoding（ローカル FT）\n'
                             '# client = "claude-cli"      # Claude CLI (claude --print)\n'
                             '# client = "codex-cli"       # Codex CLI (codex exec)\n'
                             '# client = "gemini-cli"      # Gemini CLI (gemini --prompt)\n'
@@ -514,17 +514,26 @@ def init(
                     provider=chosen_client.provider,
                     model=chosen_client.model,
                     base_url=chosen_client.base_url,
+                    client_id=chosen_client.id,
                 )
                 if chosen_client is not None
                 else DistillBackend.from_config(cfg)
             )
-            count, err_count = distill_all(
-                db,
-                backend=backend,
-                on_progress=_on_progress,
-                project_root=str(root),
-                distill_min_chars=cfg.distill_min_chars,
-            )
+            from lociaction.adapters.model.llama_server import LlamaServerError
+            from lociaction.cli.distill_cmd import bind_runtime_backend
+
+            try:
+                with bind_runtime_backend(backend, root) as bound:
+                    count, err_count = distill_all(
+                        db,
+                        backend=bound,
+                        on_progress=_on_progress,
+                        project_root=str(root),
+                        distill_min_chars=cfg.distill_min_chars,
+                    )
+            except LlamaServerError as exc:
+                typer.echo(sanitize_terminal_text(str(exc)), err=True)
+                raise typer.Exit(code=1) from None
             typer.echo(f"Distilled {count} exchange(s).")
             if err_count > 0:
                 typer.echo(

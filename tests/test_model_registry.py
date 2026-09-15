@@ -7,13 +7,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from lociaction.adapters.model.registry import (
-    _ollama_model_pulled,
     check_ready,
     detect_claude_cli,
     detect_codex_cli,
     detect_gemini_cli,
     detect_grok_cli,
-    detect_ollama_ft,
+    detect_llamacpp_ft,
     detect_omp_cli,
     detect_opencode_cli,
     discover,
@@ -24,50 +23,7 @@ from lociaction.adapters.model.registry import (
     write_client_config,
 )
 from lociaction.adapters.model.types import ClientStatus
-from lociaction.config import LOCAL_DISTILL_BASE_URL, LOCAL_DISTILL_MODEL
-
-# ---- detect_ollama_ft ----
-
-
-def test_detect_ollama_ft_binary_missing(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    status = detect_ollama_ft()
-    assert status.state == "unavailable"
-    assert status.client is None
-
-
-def test_detect_ollama_ft_model_not_pulled(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(returncode=0, stdout="NAME\nother-model:latest\n"),
-    )
-    status = detect_ollama_ft()
-    assert status.state == "setupable"
-    assert status.client is None
-
-
-def test_detect_ollama_ft_ready(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(returncode=0, stdout=f"NAME\n{LOCAL_DISTILL_MODEL}\n"),
-    )
-    status = detect_ollama_ft()
-    assert status.state == "ready"
-    assert status.client is not None
-    assert status.client.id == "ollama-ft"
-    assert status.client.base_url == LOCAL_DISTILL_BASE_URL
-
-
-def test_detect_ollama_ft_list_command_fails(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run", lambda *a, **k: MagicMock(returncode=1, stdout="")
-    )
-    status = detect_ollama_ft()
-    assert status.state == "setupable"
-
+from lociaction.config import LOCAL_DISTILL_MODEL
 
 # ---- detect_claude_cli ----
 
@@ -191,11 +147,11 @@ def test_detect_omp_cli_ready(monkeypatch) -> None:
 # ---- discover / ready_clients / recommended_id ----
 
 
-def test_discover_returns_ollama_then_claude_order(monkeypatch) -> None:
+def test_discover_returns_llamacpp_then_claude_order(monkeypatch) -> None:
     monkeypatch.setattr("shutil.which", lambda name: None)
     statuses = discover()
     assert [s.id for s in statuses] == [
-        "ollama-ft",
+        "llamacpp-ft",
         "claude-cli",
         "codex-cli",
         "gemini-cli",
@@ -214,15 +170,17 @@ def test_ready_clients_filters_by_state() -> None:
     assert [s.id for s in ready_clients(statuses)] == ["a"]
 
 
-def test_recommended_id_prefers_ollama_ft() -> None:
+def test_recommended_id_prefers_llamacpp_ft() -> None:
     statuses = [
         ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
-        ClientStatus(id="ollama-ft", label="Ollama", state="ready", reason="ready"),
+        ClientStatus(
+            id="llamacpp-ft", label="llama.cpp", state="ready", reason="ready"
+        ),
     ]
-    assert recommended_id(statuses) == "ollama-ft"
+    assert recommended_id(statuses) == "llamacpp-ft"
 
 
-def test_recommended_id_falls_back_to_first_ready_when_ollama_not_ready() -> None:
+def test_recommended_id_falls_back_to_first_ready_when_ft_not_ready() -> None:
     statuses = [
         ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
     ]
@@ -237,33 +195,14 @@ def test_recommended_id_none_when_no_ready() -> None:
 # ---- setup ----
 
 
-def test_setup_ollama_ft_binary_missing(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: None)
-    ok, msg = setup("ollama-ft")
-    assert ok is False
-    assert "ollama binary not found" in msg
-
-
-def test_setup_ollama_ft_pull_succeeds(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: MagicMock(returncode=0))
-    ok, msg = setup("ollama-ft")
-    assert ok is True
-    assert LOCAL_DISTILL_MODEL in msg
-
-
-def test_setup_ollama_ft_pull_fails(monkeypatch) -> None:
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run", lambda *a, **k: MagicMock(returncode=1, stderr="boom")
-    )
-    ok, msg = setup("ollama-ft")
-    assert ok is False
-    assert "failed" in msg
-
-
 def test_setup_unsupported_client_id() -> None:
     ok, msg = setup("claude-cli")
+    assert ok is False
+    assert "no automated setup" in msg
+
+
+def test_setup_unknown_ollama_ft_id() -> None:
+    ok, msg = setup("ollama-ft")
     assert ok is False
     assert "no automated setup" in msg
 
@@ -279,14 +218,6 @@ def test_resolve_client_claude_cli(monkeypatch) -> None:
     assert client.provider == "claude"
     assert client.base_url is None
 
-
-def test_resolve_client_ollama_ft_uses_config_overrides() -> None:
-    from lociaction.config import Config
-
-    cfg = Config(distill_model="custom-ft-model", distill_base_url="http://x:1/v1")
-    client = resolve_client("ollama-ft", cfg)
-    assert client.model == "custom-ft-model"
-    assert client.base_url == "http://x:1/v1"
 
 
 def test_resolve_client_codex_cli_passes_through_configured_model() -> None:
@@ -424,17 +355,17 @@ def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
 
     config_path = tmp_path / "config.toml"
     client = ModelClient(
-        id="ollama-ft",
+        id="openai-compat",
         provider="openai",
-        model=LOCAL_DISTILL_MODEL,
-        base_url=LOCAL_DISTILL_BASE_URL,
-        label="Ollama (local FT model)",
+        model="local-model",
+        base_url="http://127.0.0.1:8080/v1",
+        label="OpenAI-compatible endpoint",
     )
     write_client_config(config_path, client)
     content = config_path.read_text()
-    assert 'client = "ollama-ft"' in content
-    assert f'model = "{LOCAL_DISTILL_MODEL}"' in content
-    assert f'base_url = "{LOCAL_DISTILL_BASE_URL}"' in content
+    assert 'client = "openai-compat"' in content
+    assert 'model = "local-model"' in content
+    assert 'base_url = "http://127.0.0.1:8080/v1"' in content
     assert "provider" not in content
 
 
@@ -447,11 +378,11 @@ def test_write_client_config_rejects_symlinked_config_file(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.symlink_to(target)
     client = ModelClient(
-        id="ollama-ft",
+        id="llamacpp-ft",
         provider="openai",
         model="model",
-        base_url="http://localhost:11434/v1",
-        label="Ollama",
+        base_url=None,
+        label="llama.cpp",
     )
 
     try:
@@ -474,11 +405,11 @@ def test_write_client_config_rejects_oversized_existing_config(tmp_path) -> None
     original = b"x" * (MAX_CONFIG_FILE_BYTES + 1)
     config_path.write_bytes(original)
     client = ModelClient(
-        id="ollama-ft",
+        id="llamacpp-ft",
         provider="openai",
         model="model",
-        base_url="http://localhost:11434/v1",
-        label="Ollama",
+        base_url=None,
+        label="llama.cpp",
     )
 
     with pytest.raises(ValueError, match="exceeds"):
@@ -638,55 +569,6 @@ def test_write_client_config_ignores_malformed_index_section(tmp_path) -> None:
     assert 'client = "claude-cli"' in content
     assert "min_chars = 50" in content
 
-# ---- _ollama_model_pulled: NAME 列の完全一致 (#26) ----
-
-
-def test_ollama_model_pulled_exact_match(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(
-            returncode=0, stdout="NAME              ID       SIZE   MODIFIED\nqwen2.5-7b:latest abc123   4.7 GB 2 days ago\n"
-        ),
-    )
-    assert _ollama_model_pulled("qwen2.5-7b:latest") is True
-
-
-def test_ollama_model_pulled_rejects_substring_false_match(monkeypatch) -> None:
-    """'qwen2.5-7b' が pull 済みの 'qwen2.5-7b-instruct' に部分一致で誤ヒットしない
-    （#26: 以前は `model in line` の部分一致判定だった）"""
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(
-            returncode=0,
-            stdout="NAME                        ID       SIZE   MODIFIED\n"
-            "qwen2.5-7b-instruct:latest  abc123   4.7 GB 2 days ago\n",
-        ),
-    )
-    assert _ollama_model_pulled("qwen2.5-7b") is False
-
-
-def test_ollama_model_pulled_no_match_when_not_pulled(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(returncode=0, stdout="NAME\nother-model:latest\n"),
-    )
-    assert _ollama_model_pulled("qwen2.5-7b") is False
-
-
-def test_detect_ollama_ft_superstring_pull_is_not_ready(monkeypatch) -> None:
-    """LOCAL_DISTILL_MODEL の superstring がリストに存在しても ready にしない
-    （完全一致のみ ready 扱い）"""
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run",
-        lambda *a, **k: MagicMock(
-            returncode=0, stdout=f"NAME\n{LOCAL_DISTILL_MODEL}-variant\n"
-        ),
-    )
-    status = detect_ollama_ft()
-    assert status.state == "setupable"
-    assert status.client is None
-
 
 # ---- write_client_config: TOML エスケープ (#26) ----
 
@@ -715,3 +597,126 @@ def test_write_client_config_escapes_quotes_and_backslashes(tmp_path) -> None:
         parsed = tomllib.load(f)
     assert parsed["distill"]["model"] == tricky_model
     assert parsed["distill"]["base_url"] == tricky_base_url
+
+
+# ---- detect_llamacpp_ft ----
+
+
+def _patch_llamacpp_blobs(monkeypatch, *, binary: bool, tags: set[str]) -> None:
+    from pathlib import Path
+
+    from lociaction.adapters.model.ollama_blobs import OllamaBlobNotFound
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.find_llama_server_binary",
+        lambda: Path("/usr/bin/llama-server") if binary else None,
+    )
+
+    def _resolve(tag: str, root=None):
+        if tag in tags:
+            return Path("/tmp") / "blob"
+        raise OllamaBlobNotFound(f"model not pulled: {tag}")
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.ollama_blobs.resolve_model_blob",
+        _resolve,
+    )
+
+
+def test_detect_llamacpp_ft_binary_missing(monkeypatch) -> None:
+    _patch_llamacpp_blobs(monkeypatch, binary=False, tags=set())
+    status = detect_llamacpp_ft()
+    assert status.state == "unavailable"
+    assert status.client is None
+
+
+def test_detect_llamacpp_ft_base_not_pulled(monkeypatch) -> None:
+    _patch_llamacpp_blobs(monkeypatch, binary=True, tags=set())
+    status = detect_llamacpp_ft()
+    assert status.state == "setupable"
+    assert LOCAL_DISTILL_MODEL in status.reason
+
+
+def test_detect_llamacpp_ft_draft_not_pulled(monkeypatch) -> None:
+    monkeypatch.delenv("LOCI_LLAMACPP_DRAFT_MODEL", raising=False)
+    _patch_llamacpp_blobs(monkeypatch, binary=True, tags={LOCAL_DISTILL_MODEL})
+    status = detect_llamacpp_ft()
+    assert status.state == "setupable"
+    assert "qwen2.5:0.5b" in status.reason
+
+
+def test_detect_llamacpp_ft_ready_with_draft(monkeypatch) -> None:
+    monkeypatch.delenv("LOCI_LLAMACPP_DRAFT_MODEL", raising=False)
+    _patch_llamacpp_blobs(
+        monkeypatch, binary=True, tags={LOCAL_DISTILL_MODEL, "qwen2.5:0.5b"}
+    )
+    status = detect_llamacpp_ft()
+    assert status.state == "ready"
+    assert status.client is not None
+    assert status.client.id == "llamacpp-ft"
+    assert status.client.provider == "openai"
+    assert status.client.base_url is None
+    assert status.client.model == LOCAL_DISTILL_MODEL
+
+
+def test_detect_llamacpp_ft_ready_when_draft_opted_out(monkeypatch) -> None:
+    monkeypatch.setenv("LOCI_LLAMACPP_DRAFT_MODEL", "")
+    _patch_llamacpp_blobs(monkeypatch, binary=True, tags={LOCAL_DISTILL_MODEL})
+    status = detect_llamacpp_ft()
+    assert status.state == "ready"
+
+
+def test_setup_llamacpp_ft_binary_missing(monkeypatch) -> None:
+    _patch_llamacpp_blobs(monkeypatch, binary=False, tags=set())
+    ok, msg = setup("llamacpp-ft")
+    assert ok is False
+    assert "llama-server" in msg
+
+
+def test_setup_llamacpp_ft_pulls_missing_base_and_draft(monkeypatch) -> None:
+    monkeypatch.delenv("LOCI_LLAMACPP_DRAFT_MODEL", raising=False)
+    _patch_llamacpp_blobs(monkeypatch, binary=True, tags=set())
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ollama")
+    pulled: list[str] = []
+
+    def _run(cmd, **kwargs):
+        pulled.append(cmd[2])
+        return MagicMock(returncode=0, stderr="")
+
+    monkeypatch.setattr("subprocess.run", _run)
+    ok, msg = setup("llamacpp-ft")
+    assert ok is True
+    assert pulled == [LOCAL_DISTILL_MODEL, "qwen2.5:0.5b"]
+    assert LOCAL_DISTILL_MODEL in msg
+    assert "qwen2.5:0.5b" in msg
+
+
+def test_setup_llamacpp_ft_already_ready(monkeypatch) -> None:
+    monkeypatch.delenv("LOCI_LLAMACPP_DRAFT_MODEL", raising=False)
+    _patch_llamacpp_blobs(
+        monkeypatch, binary=True, tags={LOCAL_DISTILL_MODEL, "qwen2.5:0.5b"}
+    )
+    ok, msg = setup("llamacpp-ft")
+    assert ok is True
+    assert msg == "ready"
+
+
+def test_resolve_client_llamacpp_ft_ignores_base_url() -> None:
+    from lociaction.config import Config
+
+    cfg = Config(
+        distill_model="custom-ft",
+        distill_base_url="http://localhost:11434/v1",
+    )
+    client = resolve_client("llamacpp-ft", cfg)
+    assert client.id == "llamacpp-ft"
+    assert client.provider == "openai"
+    assert client.model == "custom-ft"
+    assert client.base_url is None
+
+
+def test_resolve_client_llamacpp_ft_default_model() -> None:
+    from lociaction.config import Config
+
+    client = resolve_client("llamacpp-ft", Config(distill_model=None))
+    assert client.model == LOCAL_DISTILL_MODEL

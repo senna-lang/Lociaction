@@ -12,7 +12,7 @@ Do not trigger a paid client merely to make a test pass. Use a local model when 
 
 ```text
 claude-cli  codex-cli  gemini-cli  grok-cli  opencode-cli  omp-cli
-ollama-ft   openai-compat
+llamacpp-ft   openai-compat
 ```
 
 `.lociaction/config.toml`:
@@ -46,7 +46,21 @@ loci distill --setup
 
 ## Local models
 
-`loci init` may offer to `ollama pull` `qwen2.5-7b-memory-distiller` (~4.7GB) and select `ollama-ft`. Pass `--no-local-distiller` to skip that offer.
+`loci init` may offer to `ollama pull` `qwen2.5-7b-memory-distiller` (~4.7GB) and select `llamacpp-ft`. Pass `--no-local-distiller` to skip that offer.
+
+### `llamacpp-ft` (speculative decoding)
+
+Ollama's `DRAFT` Modelfile path cannot accelerate this GGUF fine-tune (it is safetensors/MTP-only). `llamacpp-ft` instead starts an ephemeral `llama-server` for each `loci distill` run, with `--model-draft` against the same GGUF blobs Ollama already stored.
+
+Requirements:
+
+- `llama-server` on `PATH`, or `LOCI_LLAMACPP_SERVER` pointing at the binary
+- the FT model blob (`loci distill --setup` can `ollama pull` it)
+- draft model `qwen2.5:0.5b` by default (`ollama pull qwen2.5:0.5b`, or set `LOCI_LLAMACPP_DRAFT_MODEL=` to opt out)
+
+The process binds `127.0.0.1` only and is stopped when the distill batch ends. GPU offload is left to llama.cpp unless you set `LOCI_LLAMACPP_GPU_LAYERS` / `LOCI_LLAMACPP_DRAFT_GPU_LAYERS`. Logs: `.lociaction/logs/llama-server.log`.
+
+Selecting/setting up a client is still TTY-gated. An already-configured `llamacpp-ft` may run from a hook; it will not download models without you.
 
 Any OpenAI-compatible local endpoint works as `openai-compat` (both `model` and `base_url` required). No `Authorization` header is sent unless the invoking user's own `LOCIACTION_DISTILL_API_KEY` environment variable is set — project config cannot set or request an API key, so a hostile `.lociaction/config.toml` cannot make lociaction send credentials it doesn't already have:
 
@@ -57,7 +71,7 @@ model = "qwen2.5:7b"
 base_url = "http://localhost:11434/v1"
 ```
 
-If you are using Ollama's default port with the bundled fine-tuned model, prefer `client = "ollama-ft"`.
+Ollama's HTTP API is `openai-compat` with a loopback `base_url`. The bundled FT model uses `llamacpp-ft`.
 
 ## Remote OpenAI-compatible endpoints
 

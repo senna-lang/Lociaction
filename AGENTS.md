@@ -57,7 +57,7 @@ Distillation is independent of the source harness. One configured client process
 
 ```text
 claude-cli  codex-cli  gemini-cli  grok-cli  opencode-cli  omp-cli
-ollama-ft   openai-compat
+llamacpp-ft   openai-compat
 ```
 
 Use a configured local model when token cost or data locality matters. Do not trigger paid distillation merely to make a test pass.

@@ -118,11 +118,16 @@ class DistillUnconfiguredError(Exception):
 
 @dataclass(frozen=True)
 class DistillBackend:
-    """LLM backend configuration for distillation (claude / openai / codex / gemini / grok / opencode / omp)"""
+    """LLM backend configuration for distillation (claude / openai / codex / gemini / grok / opencode / omp)
+
+    client_id は runtime でプロセスを束縛する必要がある backend（llamacpp-ft）を
+    識別する。未設定なら既存の provider/base_url だけで動く。
+    """
 
     provider: str
     model: str | None
     base_url: str | None
+    client_id: str | None = None
 
     @classmethod
     def from_config(cls, cfg) -> DistillBackend:
@@ -141,6 +146,7 @@ class DistillBackend:
             provider=client.provider,
             model=client.model,
             base_url=client.base_url,
+            client_id=client.id,
         )
 
 

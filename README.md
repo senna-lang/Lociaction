@@ -79,7 +79,7 @@ When running `loci init`, if past session logs are detected, you'll be prompted 
 
 `loci init` also asks once, regardless of past session history:
 
-4. **Distill client selection** — If [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller) (a Qwen2.5-7B fine-tuned specifically for this task, SFT + ORPO on WildChat-1M) isn't pulled yet, `loci init` first offers to `ollama pull` it (~4.7GB, requires [Ollama](https://ollama.com)). It then lists every *Ready* distill client actually detected on the machine — `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, plus the just-pulled `ollama-ft` — and prompts you to pick one (`claude-cli` is recommended by default when present). Only CLIs actually on `PATH` show up; none of this depends on which harness you're currently working in — see the [Configuration](#configuration) note on that. Pass `--no-local-distiller` to skip the Ollama pull offer, or `--distill-client <id>` to select non-interactively (exits with an error if that client isn't Ready — it never silently falls back to another one). If no client is Ready, distillation is left unconfigured; run `loci distill --setup` later.
+4. **Distill client selection** — If [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller) (a Qwen2.5-7B fine-tuned specifically for this task, SFT + ORPO on WildChat-1M) isn't pulled yet, `loci init` first offers to `ollama pull` it (~4.7GB, requires [Ollama](https://ollama.com) for the GGUF blob). It then lists every *Ready* distill client actually detected on the machine — `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, plus `llamacpp-ft` — and prompts you to pick one (`llamacpp-ft` is recommended when `llama-server` is ready, otherwise the first Ready client). Only CLIs actually on `PATH` show up; none of this depends on which harness you're currently working in — see the [Configuration](#configuration) note on that. Pass `--no-local-distiller` to skip the Ollama pull offer, or `--distill-client <id>` to select non-interactively (exits with an error if that client isn't Ready — it never silently falls back to another one). If no client is Ready, distillation is left unconfigured; run `loci distill --setup` later.
 
 Invalid input on any prompt re-prompts instead of silently falling back to a default.
 
@@ -158,7 +158,7 @@ min_chars = 50                         # Skip indexing exchanges shorter than th
 
 There are two `min_chars` settings: `[index] min_chars` controls what gets indexed at all, while `[distill] min_chars` further skips distillation (the LLM cost) for short exchanges that were already indexed.
 
-`client` is independent of the harness you're actually working in — `loci distill` runs the one configured client against every undistilled exchange regardless of whether it came from Claude Code, Codex, Grok, OpenCode, or Oh My Pi (see [Harness Lifecycle](#harness-lifecycle)). Valid ids: `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, `ollama-ft`, `openai-compat`. The legacy `provider = "claude" | "openai"` + `base_url` form is still read for backward compatibility, but `client` is what `loci init` and `loci distill --setup` write and is the recommended way to configure this by hand too.
+`client` is independent of the harness you're actually working in — `loci distill` runs the one configured client against every undistilled exchange regardless of whether it came from Claude Code, Codex, Grok, OpenCode, or Oh My Pi (see [Harness Lifecycle](#harness-lifecycle)). Valid ids: `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, `llamacpp-ft`, `openai-compat`. The legacy `provider = "claude" | "openai"` + `base_url` form is still read, but `client` is what `loci init` and `loci distill --setup` write and is the recommended way to configure this by hand too.
 
 ### Distilling with a local LLM
 
@@ -172,7 +172,7 @@ base_url = "http://localhost:11434/v1"   # Ollama
 # base_url = "http://localhost:1234/v1"  # LM Studio
 ```
 
-`openai-compat` requires both `model` and `base_url` to be set — resolving fails otherwise. (If you're pointing this at Ollama's default port with the bundled fine-tuned model, use `client = "ollama-ft"` instead — it already knows the model and endpoint, see [`loci init`](#quick-start).)
+`openai-compat` requires both `model` and `base_url` to be set — resolving fails otherwise. For the bundled fine-tuned GGUF, use `client = "llamacpp-ft"` (ephemeral `llama-server --model-draft`). Pointing `openai-compat` at Ollama's HTTP port is still valid if you want that transport.
 
 `loci init` offers to set this up for you automatically with [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller), a model fine-tuned specifically for this task (see the prompt above) — no manual config needed if you accept it.
 

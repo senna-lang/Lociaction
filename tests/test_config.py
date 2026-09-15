@@ -11,7 +11,6 @@ from lociaction.config import (
     DEFAULT_DISTILL_MODEL,
     DEFAULT_DISTILL_PROVIDER,
     DEFAULT_INDEX_MIN_CHARS,
-    LOCAL_DISTILL_BASE_URL,
     LOCAL_DISTILL_MODEL,
     Config,
     load_config,
@@ -23,7 +22,6 @@ def test_local_distill_model_uses_ollama_hf_pull_syntax() -> None:
     assert LOCAL_DISTILL_MODEL == (
         "hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M"
     )
-    assert LOCAL_DISTILL_BASE_URL == "http://localhost:11434/v1"
 
 
 def test_load_config_no_file(tmp_path: Path) -> None:
@@ -331,15 +329,27 @@ def test_load_config_no_file_is_unconfigured(tmp_path: Path) -> None:
     assert cfg.distill_unconfigured is True
 
 
-def test_load_config_explicit_client_ollama_ft(tmp_path: Path) -> None:
-    """distill.client = "ollama-ft" はそのまま解決される"""
+def test_load_config_unknown_ollama_ft_client_is_unconfigured(tmp_path: Path) -> None:
+    """削除した ollama-ft id は unknown として unconfigured になる"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nclient = "ollama-ft"\n'
     )
     cfg = load_config(tmp_path)
-    assert cfg.distill_client == "ollama-ft"
+    assert cfg.distill_client is None
+    assert cfg.distill_unconfigured is True
+
+
+def test_load_config_explicit_client_llamacpp_ft(tmp_path: Path) -> None:
+    """distill.client = "llamacpp-ft" はローカル client として grant 無しで解決される"""
+    (tmp_path / ".lociaction").mkdir()
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nclient = "llamacpp-ft"\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.distill_client == "llamacpp-ft"
     assert cfg.distill_unconfigured is False
+    assert cfg.distill_model is None
 
 
 def test_load_config_rejects_unapproved_remote_client(tmp_path: Path, capsys) -> None:
@@ -407,23 +417,23 @@ def test_load_config_rejects_unapproved_legacy_remote_provider(
     assert cfg.distill_unconfigured is True
 
 
-def test_load_config_legacy_provider_openai_ollama_base_url_maps_to_ollama_ft(
+def test_load_config_legacy_provider_openai_loopback_maps_to_openai_compat(
     tmp_path: Path,
 ) -> None:
-    """旧 provider = "openai" + Ollama base_url(11434) は client = "ollama-ft" として解決される"""
+    """旧 provider = "openai" + loopback base_url は openai-compat"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         '[distill]\nprovider = "openai"\nbase_url = "http://localhost:11434/v1"\n'
     )
     cfg = load_config(tmp_path)
-    assert cfg.distill_client == "ollama-ft"
+    assert cfg.distill_client == "openai-compat"
     assert cfg.distill_unconfigured is False
 
 
 def test_load_config_legacy_provider_openai_other_base_url_maps_to_openai_compat(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """opt-in 済みの非 Ollama endpoint は openai-compat として解決される。"""
+    """opt-in 済みの非 loopback endpoint は openai-compat として解決される。"""
     monkeypatch.setenv(
         "LOCIACTION_REMOTE_DISTILL_ORIGINS", "https://api.deepseek.com"
     )
@@ -500,25 +510,26 @@ def test_load_config_non_str_base_url_warns(tmp_path: Path, capsys) -> None:
     assert "Warning" in capsys.readouterr().err
 
 
-def test_load_config_client_ollama_ft_missing_model_defers_to_none(
+def test_load_config_client_llamacpp_ft_missing_model_defers_to_none(
     tmp_path: Path,
 ) -> None:
-    """client = "ollama-ft" で model 未設定なら claude デフォルトを使わず None のまま
-    保持する（#26: 以前は DEFAULT_DISTILL_MODEL="claude-haiku-4-5..." を誤って
-    採用し、Ollama に claude 用モデル名を送っていた）"""
+    """client = "llamacpp-ft" で model 未設定なら claude デフォルトを使わず None のまま
+    保持する（#26: 以前は DEFAULT_DISTILL_MODEL を誤って採用していた）"""
     (tmp_path / ".lociaction").mkdir()
-    (tmp_path / ".lociaction" / "config.toml").write_text('[distill]\nclient = "ollama-ft"\n')
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nclient = "llamacpp-ft"\n'
+    )
     cfg = load_config(tmp_path)
-    assert cfg.distill_client == "ollama-ft"
+    assert cfg.distill_client == "llamacpp-ft"
     assert cfg.distill_model is None
     assert cfg.distill_model != DEFAULT_DISTILL_MODEL
 
 
-def test_load_config_client_ollama_ft_explicit_model_kept(tmp_path: Path) -> None:
-    """client = "ollama-ft" で model が明示されていればそれを使う"""
+def test_load_config_client_llamacpp_ft_explicit_model_kept(tmp_path: Path) -> None:
+    """client = "llamacpp-ft" で model が明示されていればそれを使う"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
-        '[distill]\nclient = "ollama-ft"\nmodel = "custom-ft:latest"\n'
+        '[distill]\nclient = "llamacpp-ft"\nmodel = "custom-ft:latest"\n'
     )
     cfg = load_config(tmp_path)
     assert cfg.distill_model == "custom-ft:latest"
@@ -535,17 +546,17 @@ def test_load_config_client_claude_cli_missing_model_uses_claude_default(
     assert cfg.distill_model == DEFAULT_DISTILL_MODEL
 
 
-def test_load_config_legacy_provider_openai_ollama_missing_model_defers_to_none(
+def test_load_config_legacy_provider_openai_loopback_missing_model_defers_to_none(
     tmp_path: Path,
 ) -> None:
-    """旧 provider = "openai" + Ollama base_url + model 未設定でも、claude デフォルト
-    に落ちずに None のまま保持する（registry 側の ollama-ft デフォルトへ委ねる）"""
+    """旧 provider = "openai" + loopback base_url + model 未設定でも claude デフォルト
+    に落ちずに None のまま保持する"""
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text(
         "[distill]\nprovider = 'openai'\nbase_url = 'http://localhost:11434/v1'\n"
     )
     cfg = load_config(tmp_path)
-    assert cfg.distill_client == "ollama-ft"
+    assert cfg.distill_client == "openai-compat"
     assert cfg.distill_model is None
 
 
@@ -565,20 +576,22 @@ def test_load_config_legacy_provider_openai_compat_missing_model_defers_to_none(
     assert cfg.distill_model is None
 
 
-def test_load_config_end_to_end_ollama_ft_resolves_to_local_distill_model(
+def test_load_config_end_to_end_llamacpp_ft_resolves_to_local_distill_model(
     tmp_path: Path,
 ) -> None:
-    """end-to-end: client="ollama-ft" + model 未設定 → resolve_client が
-    LOCAL_DISTILL_MODEL を使う（claude-haiku-4-5 のような claude 専用モデル名を
-    Ollama に送らない）"""
+    """end-to-end: client="llamacpp-ft" + model 未設定 → resolve_client が
+    LOCAL_DISTILL_MODEL を使う"""
     from lociaction.adapters.model.registry import resolve_client
 
     (tmp_path / ".lociaction").mkdir()
-    (tmp_path / ".lociaction" / "config.toml").write_text('[distill]\nclient = "ollama-ft"\n')
+    (tmp_path / ".lociaction" / "config.toml").write_text(
+        '[distill]\nclient = "llamacpp-ft"\n'
+    )
     cfg = load_config(tmp_path)
-    client = resolve_client("ollama-ft", cfg)
+    client = resolve_client("llamacpp-ft", cfg)
     assert client.model == LOCAL_DISTILL_MODEL
     assert client.model != DEFAULT_DISTILL_MODEL
+    assert client.base_url is None
 
 
 def test_load_config_end_to_end_openai_compat_missing_model_raises(

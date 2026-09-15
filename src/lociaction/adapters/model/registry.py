@@ -1,7 +1,7 @@
 """蒸留 ModelClient の discover/setup/resolve。
 
-v1 必須 client: ollama-ft, claude-cli。openai-compat は config 明示時のみ resolve
-対象になる（自動検出しない — 汎用エンドポイントを推測すると誤検出のリスクが高い）。
+v1 必須 client: llamacpp-ft, claude-cli。openai-compat は config 明示時のみ
+resolve 対象になる（自動検出しない — 汎用エンドポイントを推測すると誤検出のリスクが高い）。
 
 silent fallback 禁止: discover() は「今 Ready なもの」だけを返す。呼び出し側
 （cli/init, distill --setup, runtime reselect）が Ready 一覧から選ばせる。
@@ -14,14 +14,12 @@ import subprocess
 
 from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.config import (
-    LOCAL_DISTILL_BASE_URL,
     LOCAL_DISTILL_MODEL,
     MAX_CONFIG_FILE_BYTES,
 )
 
-# v1 で discover() が調べる client id（表示順 = recommended 優先度）
 DISCOVERABLE_CLIENT_IDS = (
-    "ollama-ft",
+    "llamacpp-ft",
     "claude-cli",
     "codex-cli",
     "gemini-cli",
@@ -30,53 +28,60 @@ DISCOVERABLE_CLIENT_IDS = (
     "omp-cli",
 )
 
+_LLAMACPP_FT_LABEL = "llama.cpp (local FT + speculative decoding)"
 
-def _ollama_model_pulled(model: str) -> bool:
-    """`ollama list` の NAME 列が model と完全一致する行があるか確認する。
+def detect_llamacpp_ft() -> ClientStatus:
+    """llama-server binary + FT/draft GGUF blob の有無を確認する。
 
-    部分一致だと `qwen2.5-7b` が `qwen2.5-7b-instruct` に誤ヒットするため、
-    各行の先頭列（NAME、空白区切り）のみを比較する。1行目はヘッダなのでスキップ。
+    binary 欠如は unavailable（案内のみ）。blob 欠如は setupable（ollama pull）。
     """
-    try:
-        result = subprocess.run(
-            ["ollama", "list"], capture_output=True, text=True, timeout=10
-        )
-    except (subprocess.SubprocessError, OSError):
-        return False
-    if result.returncode != 0:
-        return False
-    lines = result.stdout.splitlines()[1:]  # ヘッダ行 "NAME ..." を除く
-    names = {line.split()[0] for line in lines if line.split()}
-    return model in names
+    from lociaction.adapters.model.llama_server import (
+        configured_draft_model,
+        find_llama_server_binary,
+    )
+    from lociaction.adapters.model.ollama_blobs import (
+        OllamaBlobNotFound,
+        resolve_model_blob,
+    )
 
-
-def detect_ollama_ft() -> ClientStatus:
-    """Ollama binary + FT model の pull 状態を確認する"""
-    if shutil.which("ollama") is None:
+    if find_llama_server_binary() is None:
         return ClientStatus(
-            id="ollama-ft",
-            label="Ollama (local FT model)",
+            id="llamacpp-ft",
+            label=_LLAMACPP_FT_LABEL,
             state="unavailable",
-            reason="ollama binary not found in PATH",
+            reason="llama-server binary not found in PATH",
         )
-    if not _ollama_model_pulled(LOCAL_DISTILL_MODEL):
+    try:
+        resolve_model_blob(LOCAL_DISTILL_MODEL)
+    except OllamaBlobNotFound:
         return ClientStatus(
-            id="ollama-ft",
-            label="Ollama (local FT model)",
+            id="llamacpp-ft",
+            label=_LLAMACPP_FT_LABEL,
             state="setupable",
             reason=f"model not pulled: {LOCAL_DISTILL_MODEL}",
         )
+    draft = configured_draft_model()
+    if draft is not None:
+        try:
+            resolve_model_blob(draft)
+        except OllamaBlobNotFound:
+            return ClientStatus(
+                id="llamacpp-ft",
+                label=_LLAMACPP_FT_LABEL,
+                state="setupable",
+                reason=f"draft model not pulled: {draft}",
+            )
     return ClientStatus(
-        id="ollama-ft",
-        label="Ollama (local FT model)",
+        id="llamacpp-ft",
+        label=_LLAMACPP_FT_LABEL,
         state="ready",
         reason="ready",
         client=ModelClient(
-            id="ollama-ft",
+            id="llamacpp-ft",
             provider="openai",
             model=LOCAL_DISTILL_MODEL,
-            base_url=LOCAL_DISTILL_BASE_URL,
-            label="Ollama (local FT model)",
+            base_url=None,
+            label=_LLAMACPP_FT_LABEL,
         ),
     )
 
@@ -228,7 +233,7 @@ def detect_omp_cli() -> ClientStatus:
 
 
 _DETECTORS = {
-    "ollama-ft": detect_ollama_ft,
+    "llamacpp-ft": detect_llamacpp_ft,
     "claude-cli": detect_claude_cli,
     "codex-cli": detect_codex_cli,
     "gemini-cli": detect_gemini_cli,
@@ -239,7 +244,7 @@ _DETECTORS = {
 
 
 def discover() -> list[ClientStatus]:
-    """v1 必須 client を検出順（ollama-ft, claude-cli, codex-cli, gemini-cli）で返す"""
+    """DISCOVERABLE_CLIENT_IDS 順（llamacpp-ft, claude-cli, ...）で返す"""
     return [_DETECTORS[client_id]() for client_id in DISCOVERABLE_CLIENT_IDS]
 
 
@@ -248,23 +253,28 @@ def ready_clients(statuses: list[ClientStatus]) -> list[ClientStatus]:
 
 
 def recommended_id(statuses: list[ClientStatus]) -> str | None:
-    """Ready なら ollama-ft を推奨、なければ最初の Ready、なければ None"""
+    """Ready なら llamacpp-ft、なければ最初の Ready、なければ None。"""
     ready = ready_clients(statuses)
     if not ready:
         return None
     for s in ready:
-        if s.id == "ollama-ft":
+        if s.id == "llamacpp-ft":
             return s.id
     return ready[0].id
 
 
 def setup(client_id: str) -> tuple[bool, str]:
-    """setupable な client を Ready にする（今は ollama-ft の `ollama pull` のみ）。
+    """setupable な client を Ready にする。
 
-    binary 自体のインストールは実行しない — 案内のみ（D6）。
+    llamacpp-ft は `ollama pull` で GGUF blob を揃える。llama-server / ollama
+    自体のインストールは実行しない — 案内のみ（D6）。
     """
-    if client_id != "ollama-ft":
+    if client_id != "llamacpp-ft":
         return False, f"no automated setup for {client_id}"
+    return _setup_llamacpp_ft()
+
+
+def _pull_ollama_model(model: str) -> tuple[bool, str]:
     if shutil.which("ollama") is None:
         return False, (
             "ollama binary not found — install from "
@@ -272,7 +282,7 @@ def setup(client_id: str) -> tuple[bool, str]:
         )
     try:
         result = subprocess.run(
-            ["ollama", "pull", LOCAL_DISTILL_MODEL],
+            ["ollama", "pull", model],
             capture_output=True,
             text=True,
             timeout=1800,
@@ -281,7 +291,44 @@ def setup(client_id: str) -> tuple[bool, str]:
         return False, f"ollama pull failed: {e}"
     if result.returncode != 0:
         return False, f"ollama pull failed: {result.stderr.strip()}"
-    return True, f"pulled {LOCAL_DISTILL_MODEL}"
+    return True, f"pulled {model}"
+
+
+def _setup_llamacpp_ft() -> tuple[bool, str]:
+    from lociaction.adapters.model.llama_server import (
+        configured_draft_model,
+        find_llama_server_binary,
+    )
+    from lociaction.adapters.model.ollama_blobs import (
+        OllamaBlobNotFound,
+        resolve_model_blob,
+    )
+
+    if find_llama_server_binary() is None:
+        return False, (
+            "llama-server binary not found — install llama.cpp, "
+            "put llama-server on PATH, or set LOCI_LLAMACPP_SERVER"
+        )
+    pulled: list[str] = []
+    try:
+        resolve_model_blob(LOCAL_DISTILL_MODEL)
+    except OllamaBlobNotFound:
+        ok, msg = _pull_ollama_model(LOCAL_DISTILL_MODEL)
+        if not ok:
+            return False, msg
+        pulled.append(msg)
+    draft = configured_draft_model()
+    if draft is not None:
+        try:
+            resolve_model_blob(draft)
+        except OllamaBlobNotFound:
+            ok, msg = _pull_ollama_model(draft)
+            if not ok:
+                return False, msg
+            pulled.append(msg)
+    if not pulled:
+        return True, "ready"
+    return True, "; ".join(pulled)
 
 
 def resolve_client(client_id: str, cfg) -> ModelClient:
@@ -297,13 +344,13 @@ def resolve_client(client_id: str, cfg) -> ModelClient:
             base_url=None,
             label="Claude CLI",
         )
-    if client_id == "ollama-ft":
+    if client_id == "llamacpp-ft":
         return ModelClient(
-            id="ollama-ft",
+            id="llamacpp-ft",
             provider="openai",
             model=cfg.distill_model or LOCAL_DISTILL_MODEL,
-            base_url=cfg.distill_base_url or LOCAL_DISTILL_BASE_URL,
-            label="Ollama (local FT model)",
+            base_url=None,
+            label=_LLAMACPP_FT_LABEL,
         )
     if client_id == "codex-cli":
         return ModelClient(

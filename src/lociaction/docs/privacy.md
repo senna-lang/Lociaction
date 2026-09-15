@@ -22,6 +22,6 @@ Privacy guidance lives in `--help` and in this document. Lociaction never mixes 
 
 ## Local data
 
-Project state lives under `.lociaction/` (`memory.db`, `config.toml`, sockets, locks). Do not commit `.lociaction/`, personal session logs, or local model data. Distillation clients receive exchange text; a paid cloud CLI will send that text to the provider. Use `ollama-ft` or `openai-compat` against a local endpoint when the corpus must stay on the machine.
+Project state lives under `.lociaction/` (`memory.db`, `config.toml`, sockets, locks). Do not commit `.lociaction/`, personal session logs, or local model data. Distillation clients receive exchange text; a paid cloud CLI will send that text to the provider. Use `llamacpp-ft` or `openai-compat` against a local endpoint when the corpus must stay on the machine.
 
 See `loci docs show distillation`.

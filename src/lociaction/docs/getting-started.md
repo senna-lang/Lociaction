@@ -63,7 +63,7 @@ Useful flags:
 | `--distill-limit N` | Distill only the most recent N existing exchanges |
 | `--min-chars N` | Set the index-time character filter without prompting |
 
-Valid client ids: `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, `ollama-ft`, `openai-compat`.
+Valid client ids: `claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, `llamacpp-ft`, `openai-compat`.
 
 After init:
 

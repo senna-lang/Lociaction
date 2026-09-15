@@ -22,12 +22,12 @@ _CLAUDE_CLIENT = ModelClient(
     base_url=None,
     label="Claude CLI",
 )
-_OLLAMA_CLIENT = ModelClient(
-    id="ollama-ft",
+_LLAMACPP_CLIENT = ModelClient(
+    id="llamacpp-ft",
     provider="openai",
     model="ft-model",
-    base_url="http://localhost:11434/v1",
-    label="Ollama (local FT model)",
+    base_url=None,
+    label="llama.cpp (local FT + speculative decoding)",
 )
 
 
@@ -109,17 +109,17 @@ def test_distill_configured_not_ready_non_tty_does_not_autoswitch(
 ) -> None:
     """configured client が Ready でないとき、非対話では別 client に自動切替しない"""
     lociaction_dir = _init_project(tmp_path, monkeypatch)
-    _write_config(lociaction_dir, '[distill]\nclient = "ollama-ft"\n')
+    _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
     calls: list = []
     _stub_distill_all(monkeypatch, calls)
     monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
     monkeypatch.setattr(
         "lociaction.adapters.model.registry.check_ready",
         lambda client_id: ClientStatus(
-            id="ollama-ft",
-            label="Ollama (local FT model)",
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
             state="unavailable",
-            reason="ollama binary not found in PATH",
+            reason="llama-server binary not found in PATH",
         ),
     )
 
@@ -160,6 +160,89 @@ def test_distill_configured_ready_uses_it_without_prompting(
     assert result.exit_code == 0
     assert len(calls) == 1
     assert calls[0].provider == "claude"
+
+
+def test_distill_llamacpp_ft_non_tty_starts_server(
+    tmp_path, monkeypatch
+) -> None:
+    """configured llamacpp-ft は非対話でもサーバを起動し base_url を差し替える。
+    選択/セットアップの TTY ゲートとは独立。"""
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
+    calls: list = []
+    _stub_distill_all(monkeypatch, calls)
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
+            state="ready",
+            reason="ready",
+            client=_LLAMACPP_CLIENT,
+        ),
+    )
+
+    class _FakeProc:
+        base_url = "http://127.0.0.1:18081/v1"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.spec_for_model",
+        lambda model: object(),
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.LlamaServerProcess",
+        lambda spec, log_path=None: _FakeProc(),
+    )
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0].base_url == "http://127.0.0.1:18081/v1"
+    assert calls[0].client_id == "llamacpp-ft"
+    assert calls[0].provider == "openai"
+
+
+def test_distill_llamacpp_ft_start_failure_exits_nonzero(
+    tmp_path, monkeypatch
+) -> None:
+    from lociaction.adapters.model.llama_server import LlamaServerError
+
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
+    calls: list = []
+    _stub_distill_all(monkeypatch, calls)
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
+            state="ready",
+            reason="ready",
+            client=_LLAMACPP_CLIENT,
+        ),
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.spec_for_model",
+        lambda model: (_ for _ in ()).throw(
+            LlamaServerError("draft model 'qwen2.5:0.5b' is not pulled")
+        ),
+    )
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 1
+    assert "qwen2.5:0.5b" in result.output
+    assert "LOCI_LLAMACPP_DRAFT_MODEL" in result.output or "not pulled" in result.output
+    assert calls == []
 
 
 
@@ -218,11 +301,11 @@ def test_distill_setup_saves_selection_to_config(tmp_path, monkeypatch) -> None:
         "lociaction.adapters.model.registry.discover",
         lambda: [
             ClientStatus(
-                id="ollama-ft",
-                label="Ollama (local FT model)",
+                id="llamacpp-ft",
+                label="llama.cpp (local FT + speculative decoding)",
                 state="ready",
                 reason="ready",
-                client=_OLLAMA_CLIENT,
+                client=_LLAMACPP_CLIENT,
             ),
             ClientStatus(
                 id="claude-cli",

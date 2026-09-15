@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -86,7 +89,10 @@ def _resolve_backend(cfg, root, is_tty: bool):
 
     def _from_client(client: ModelClient) -> DistillBackend:
         return DistillBackend(
-            provider=client.provider, model=client.model, base_url=client.base_url
+            provider=client.provider,
+            model=client.model,
+            base_url=client.base_url,
+            client_id=client.id,
         )
 
     try:
@@ -128,6 +134,35 @@ def _resolve_backend(cfg, root, is_tty: bool):
     client = prompt_client_selection(root)
     return _from_client(client) if client else None
 
+
+
+@contextmanager
+def bind_runtime_backend(backend, project_root: Path) -> Iterator:
+    """llamacpp-ft なら ephemeral llama-server を起動して base_url を差し替える。
+
+    他 client は no-op。選択/セットアップの TTY ゲートとは独立 — 既設定なら
+    hook 経由でもローカルプロセスの起動/停止だけを行う。
+    """
+    if backend.client_id != "llamacpp-ft":
+        yield backend
+        return
+    from lociaction.adapters.model.llama_server import (
+        LlamaServerProcess,
+        spec_for_model,
+    )
+    from lociaction.llm import DistillBackend
+    from lociaction.paths import lociaction_dir
+
+    log_path = lociaction_dir(project_root) / "logs" / "llama-server.log"
+    with LlamaServerProcess(
+        spec_for_model(backend.model), log_path=log_path
+    ) as proc:
+        yield DistillBackend(
+            provider="openai",
+            model=backend.model,
+            base_url=proc.base_url,
+            client_id="llamacpp-ft",
+        )
 
 def distill(
     limit: Annotated[
@@ -219,14 +254,21 @@ def distill(
                 err=True,
             )
 
-        count, err_count = distill_all(
-            db,
-            limit=limit,
-            backend=backend,
-            on_progress=_on_progress,
-            project_root=str(root),
-            distill_min_chars=cfg.distill_min_chars,
-        )
+        from lociaction.adapters.model.llama_server import LlamaServerError
+
+        try:
+            with bind_runtime_backend(backend, root) as bound:
+                count, err_count = distill_all(
+                    db,
+                    limit=limit,
+                    backend=bound,
+                    on_progress=_on_progress,
+                    project_root=str(root),
+                    distill_min_chars=cfg.distill_min_chars,
+                )
+        except LlamaServerError as exc:
+            typer.echo(sanitize_terminal_text(str(exc)), err=True)
+            raise typer.Exit(1) from None
         typer.echo(f"Distilled {count} exchange(s).")
         if err_count > 0:
             typer.echo(f"{err_count} exchange(s) failed — see errors above.", err=True)

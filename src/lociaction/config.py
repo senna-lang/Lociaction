@@ -37,7 +37,7 @@ DEFAULT_DISTILL_PROVIDER = "claude"
 VALID_DISTILL_PROVIDERS = frozenset({"claude", "openai"})
 VALID_DISTILL_CLIENT_IDS = frozenset(
     {
-        "ollama-ft",
+        "llamacpp-ft",
         "claude-cli",
         "openai-compat",
         "codex-cli",
@@ -50,8 +50,20 @@ VALID_DISTILL_CLIENT_IDS = frozenset(
 
 # ローカル蒸留モデル（`loci init` の対話プロンプトで opt-in した場合のデフォルト値）。
 # GGUF は Ollama 経由で hf.co/<repo>:<quant> の形式で直接 pull できる。
+# 推論は `llamacpp-ft`（llama-server --model-draft）が担う。
 LOCAL_DISTILL_MODEL = "hf.co/sennaLLMLearner/qwen2.5-7b-memory-distiller:Q4_K_M"
-LOCAL_DISTILL_BASE_URL = "http://localhost:11434/v1"
+
+# llama.cpp 直接起動（`llamacpp-ft`）。Ollama の DRAFT 経路は GGUF/非MTP では
+# 使えないので、llama-server --model-draft を ephemeral プロセスとして持つ。
+LLAMACPP_SERVER_BINARY_ENV = "LOCI_LLAMACPP_SERVER"
+LLAMACPP_DRAFT_MODEL_ENV = "LOCI_LLAMACPP_DRAFT_MODEL"
+LLAMACPP_DRAFT_MODEL = "qwen2.5:0.5b"
+LLAMACPP_DRAFT_MAX_ENV = "LOCI_LLAMACPP_DRAFT_MAX"
+LLAMACPP_DRAFT_MAX = 4
+LLAMACPP_GPU_LAYERS_ENV = "LOCI_LLAMACPP_GPU_LAYERS"
+LLAMACPP_DRAFT_GPU_LAYERS_ENV = "LOCI_LLAMACPP_DRAFT_GPU_LAYERS"
+LLAMACPP_HEALTH_TIMEOUT_ENV = "LOCI_LLAMACPP_HEALTH_TIMEOUT"
+LLAMACPP_HEALTH_TIMEOUT = 120.0
 
 # project-local config.toml だけでは蒸留内容の送信先をリモートへ変更できない。
 # リモート OpenAI 互換 endpoint は、呼び出すユーザーが environment で origin を許可する。
@@ -152,8 +164,8 @@ def load_config(project_root: Path) -> Config:
 
     # model は TOML 未設定なら None のまま保持し、client 解決後（下部）に client
     # 種別に応じたデフォルトへ委ねる。ここで claude 専用の DEFAULT_DISTILL_MODEL
-    # を先に埋めると、client="ollama-ft" や legacy provider="openai" でも
-    # claude のモデル名を Ollama/OpenAI 互換バックエンドへ送ってしまう。
+    # を先に埋めると、client="llamacpp-ft" や legacy provider="openai" でも
+    # claude のモデル名をローカル/OpenAI 互換バックエンドへ送ってしまう。
     model: str | None
     if "model" in distill:
         raw_model = distill["model"]
@@ -281,10 +293,7 @@ def load_config(project_root: Path) -> Config:
         if provider == "claude":
             candidate_client = "claude-cli"
         else:
-            # provider = "openai": Ollama のデフォルトポート(11434)を使っていれば
-            # ローカル FT (ollama-ft) とみなし、それ以外は汎用 openai-compat とする。
-            is_ollama = bool(base_url) and "11434" in base_url
-            candidate_client = "ollama-ft" if is_ollama else "openai-compat"
+            candidate_client = "openai-compat"
         if _requires_remote_client_grant(candidate_client) and candidate_client not in _allowed_remote_clients():
             print(
                 f"Warning: distill.provider resolves to remote client '{candidate_client}', "
@@ -302,7 +311,7 @@ def load_config(project_root: Path) -> Config:
         distill_unconfigured = True
 
     # model がまだ None（TOML 未設定/不正）で、claude 系 client に着地する場合
-    # のみ claude デフォルトを補う。ollama-ft/openai-compat は各自のデフォルト
+    # のみ claude デフォルトを補う。llamacpp-ft/openai-compat は各自のデフォルト
     # 解決に委ねる（registry.resolve_client 側で LOCAL_DISTILL_MODEL を適用、
     # あるいは openai-compat のように明示指定必須ならそこでエラーにする）。
     if model is None and distill_client in (None, "claude-cli"):
