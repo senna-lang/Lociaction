@@ -569,15 +569,16 @@ def test_load_config_end_to_end_ollama_ft_resolves_to_local_distill_model(
     tmp_path: Path,
 ) -> None:
     """end-to-end: client="ollama-ft" + model 未設定 → resolve_client が
-    LOCAL_DISTILL_MODEL を使う（claude-haiku-4-5 のような claude 専用モデル名を
-    Ollama に送らない）"""
+    LOCAL_DISTILL_DRAFTER_MODEL（drafter 結合済みモデル）を使う
+    （claude-haiku-4-5 のような claude 専用モデル名を Ollama に送らない）"""
     from lociaction.adapters.model.registry import resolve_client
+    from lociaction.config import LOCAL_DISTILL_DRAFTER_MODEL
 
     (tmp_path / ".lociaction").mkdir()
     (tmp_path / ".lociaction" / "config.toml").write_text('[distill]\nclient = "ollama-ft"\n')
     cfg = load_config(tmp_path)
     client = resolve_client("ollama-ft", cfg)
-    assert client.model == LOCAL_DISTILL_MODEL
+    assert client.model == LOCAL_DISTILL_DRAFTER_MODEL
     assert client.model != DEFAULT_DISTILL_MODEL
 
 

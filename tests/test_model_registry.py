@@ -45,9 +45,18 @@ def test_detect_ollama_ft_model_not_pulled(monkeypatch) -> None:
     status = detect_ollama_ft()
     assert status.state == "setupable"
     assert status.client is None
+    assert LOCAL_DISTILL_MODEL in status.reason
 
 
-def test_detect_ollama_ft_ready(monkeypatch) -> None:
+def test_detect_ollama_ft_base_pulled_no_drafter_still_ready_for_backward_compat(
+    monkeypatch,
+) -> None:
+    """FT本体は pull 済みだが drafter (loci-distiller) が未作成でも ready のまま。
+    既存 config.toml が生の FT モデル名を明示している既存ユーザーの
+    `loci distill`（特に非対話の hook 実行）を「not ready」で止めてはならない
+    ——drafter は新規セットアップ時にだけ優先される任意の高速化。"""
+    from lociaction.config import LOCAL_DISTILL_DRAFTER_MODEL
+
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
     monkeypatch.setattr(
         "subprocess.run",
@@ -56,7 +65,27 @@ def test_detect_ollama_ft_ready(monkeypatch) -> None:
     status = detect_ollama_ft()
     assert status.state == "ready"
     assert status.client is not None
+    assert status.client.model == LOCAL_DISTILL_MODEL
+    assert LOCAL_DISTILL_DRAFTER_MODEL not in (status.client.model or "")
+
+
+def test_detect_ollama_ft_ready(monkeypatch) -> None:
+    """drafter (loci-distiller) が作成済みなら ready で、client.model は
+    生の FT 本体名ではなく drafter モデル名を指す。"""
+    from lociaction.config import LOCAL_DISTILL_DRAFTER_MODEL
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **k: MagicMock(
+            returncode=0, stdout=f"NAME\n{LOCAL_DISTILL_DRAFTER_MODEL}\n"
+        ),
+    )
+    status = detect_ollama_ft()
+    assert status.state == "ready"
+    assert status.client is not None
     assert status.client.id == "ollama-ft"
+    assert status.client.model == LOCAL_DISTILL_DRAFTER_MODEL
     assert status.client.base_url == LOCAL_DISTILL_BASE_URL
 
 
@@ -67,7 +96,6 @@ def test_detect_ollama_ft_list_command_fails(monkeypatch) -> None:
     )
     status = detect_ollama_ft()
     assert status.state == "setupable"
-
 
 # ---- detect_claude_cli ----
 
@@ -244,28 +272,162 @@ def test_setup_ollama_ft_binary_missing(monkeypatch) -> None:
     assert "ollama binary not found" in msg
 
 
-def test_setup_ollama_ft_pull_succeeds(monkeypatch) -> None:
+def _ollama_command_dispatcher(
+    pulled_models: list[str],
+    *,
+    pull_returncode: int = 0,
+    create_returncode: int = 0,
+    pull_stderr: str = "",
+    create_stderr: str = "",
+):
+    """`ollama list`/`pull`/`create` それぞれに妥当な応答を返す subprocess.run
+    差し替え。呼び出されたコマンド列も記録して検証に使う。"""
+    calls: list[list[str]] = []
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["ollama", "list"]:
+            names = "\n".join(pulled_models)
+            return MagicMock(returncode=0, stdout=f"NAME\n{names}\n")
+        if cmd[:2] == ["ollama", "pull"]:
+            return MagicMock(returncode=pull_returncode, stdout="", stderr=pull_stderr)
+        if cmd[:2] == ["ollama", "create"]:
+            return MagicMock(
+                returncode=create_returncode, stdout="", stderr=create_stderr
+            )
+        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+
+    return _run, calls
+
+
+def test_setup_ollama_ft_full_flow_pulls_both_models_and_creates_drafter(
+    monkeypatch,
+) -> None:
+    """何も pull されていない状態から、FT本体・drafterモデルの両方を pull し、
+    結合した drafter-enabled モデルを ollama create する。"""
+    from lociaction.config import LOCAL_DISTILL_DRAFT_MODEL, LOCAL_DISTILL_DRAFTER_MODEL
+
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: MagicMock(returncode=0))
+    run, calls = _ollama_command_dispatcher(pulled_models=[])
+    monkeypatch.setattr("subprocess.run", run)
+
     ok, msg = setup("ollama-ft")
+
     assert ok is True
-    assert LOCAL_DISTILL_MODEL in msg
+    assert LOCAL_DISTILL_DRAFTER_MODEL in msg
+    assert LOCAL_DISTILL_DRAFT_MODEL in msg
+    pull_targets = [c[2] for c in calls if c[:2] == ["ollama", "pull"]]
+    assert pull_targets == [LOCAL_DISTILL_MODEL, LOCAL_DISTILL_DRAFT_MODEL]
+    create_calls = [c for c in calls if c[:2] == ["ollama", "create"]]
+    assert len(create_calls) == 1
+    assert create_calls[0][2] == LOCAL_DISTILL_DRAFTER_MODEL
 
 
-def test_setup_ollama_ft_pull_fails(monkeypatch) -> None:
+def test_setup_ollama_ft_skips_pull_for_already_pulled_models(monkeypatch) -> None:
+    """FT本体・drafterモデルどちらも既に pull 済みなら、pull は呼ばず
+    ollama create だけ実行する。"""
+    from lociaction.config import LOCAL_DISTILL_DRAFT_MODEL, LOCAL_DISTILL_DRAFTER_MODEL
+
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
-    monkeypatch.setattr(
-        "subprocess.run", lambda *a, **k: MagicMock(returncode=1, stderr="boom")
+    run, calls = _ollama_command_dispatcher(
+        pulled_models=[LOCAL_DISTILL_MODEL, LOCAL_DISTILL_DRAFT_MODEL]
     )
+    monkeypatch.setattr("subprocess.run", run)
+
     ok, msg = setup("ollama-ft")
+
+    assert ok is True
+    assert LOCAL_DISTILL_DRAFTER_MODEL in msg
+    assert not [c for c in calls if c[:2] == ["ollama", "pull"]]
+    assert len([c for c in calls if c[:2] == ["ollama", "create"]]) == 1
+
+
+def test_setup_ollama_ft_base_pull_fails_does_not_pull_draft_or_create(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
+    run, calls = _ollama_command_dispatcher(
+        pulled_models=[], pull_returncode=1, pull_stderr="boom"
+    )
+    monkeypatch.setattr("subprocess.run", run)
+
+    ok, msg = setup("ollama-ft")
+
     assert ok is False
     assert "failed" in msg
+    assert LOCAL_DISTILL_MODEL in msg
+    assert not [c for c in calls if c[:2] == ["ollama", "create"]]
+
+
+def test_setup_ollama_ft_create_fails(monkeypatch) -> None:
+    """pull は両方成功しても `ollama create` が失敗すれば setup 全体を失敗にする。"""
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
+    run, calls = _ollama_command_dispatcher(
+        pulled_models=[], create_returncode=1, create_stderr="create boom"
+    )
+    monkeypatch.setattr("subprocess.run", run)
+
+    ok, msg = setup("ollama-ft")
+
+    assert ok is False
+    assert "ollama create failed" in msg
+    assert "create boom" in msg
 
 
 def test_setup_unsupported_client_id() -> None:
     ok, msg = setup("claude-cli")
     assert ok is False
     assert "no automated setup" in msg
+
+
+# ---- upgrade_ollama_ft_drafter_if_missing ----
+
+
+def test_upgrade_ollama_ft_drafter_if_missing_upgrades_raw_model(monkeypatch) -> None:
+    """生の FT 本体のまま ready な既存ユーザーには、drafter を追加する
+    (setup と同じ pull+create シーケンス) を実行する。"""
+    from lociaction.adapters.model.registry import upgrade_ollama_ft_drafter_if_missing
+    from lociaction.config import LOCAL_DISTILL_DRAFT_MODEL, LOCAL_DISTILL_DRAFTER_MODEL
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
+    run, calls = _ollama_command_dispatcher(pulled_models=[LOCAL_DISTILL_MODEL])
+    monkeypatch.setattr("subprocess.run", run)
+
+    result = upgrade_ollama_ft_drafter_if_missing()
+
+    assert result is not None
+    ok, msg = result
+    assert ok is True
+    assert LOCAL_DISTILL_DRAFTER_MODEL in msg
+    pull_targets = [c[2] for c in calls if c[:2] == ["ollama", "pull"]]
+    assert pull_targets == [LOCAL_DISTILL_DRAFT_MODEL]
+    assert len([c for c in calls if c[:2] == ["ollama", "create"]]) == 1
+
+
+def test_upgrade_ollama_ft_drafter_if_missing_noop_when_already_has_drafter(
+    monkeypatch,
+) -> None:
+    """drafter が既に作成済みなら何もしない（None）。"""
+    from lociaction.adapters.model.registry import upgrade_ollama_ft_drafter_if_missing
+    from lociaction.config import LOCAL_DISTILL_DRAFTER_MODEL
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/ollama")
+    run, calls = _ollama_command_dispatcher(pulled_models=[LOCAL_DISTILL_DRAFTER_MODEL])
+    monkeypatch.setattr("subprocess.run", run)
+
+    result = upgrade_ollama_ft_drafter_if_missing()
+
+    assert result is None
+    assert not [c for c in calls if c[:2] in (["ollama", "pull"], ["ollama", "create"])]
+
+
+def test_upgrade_ollama_ft_drafter_if_missing_noop_when_not_ready(monkeypatch) -> None:
+    """ollama-ft がそもそも ready でなければ何もしない（None）。"""
+    from lociaction.adapters.model.registry import upgrade_ollama_ft_drafter_if_missing
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    assert upgrade_ollama_ft_drafter_if_missing() is None
 
 
 # ---- resolve_client ----
@@ -671,6 +833,34 @@ def test_ollama_model_pulled_no_match_when_not_pulled(monkeypatch) -> None:
         lambda *a, **k: MagicMock(returncode=0, stdout="NAME\nother-model:latest\n"),
     )
     assert _ollama_model_pulled("qwen2.5-7b") is False
+
+
+def test_ollama_model_pulled_matches_implicit_latest_tag_for_untagged_name(
+    monkeypatch,
+) -> None:
+    """`ollama create loci-distiller` はタグ無しだと `loci-distiller:latest`
+    として `ollama list` に現れる。タグ無し参照はこの暗黙タグを認識できないと
+    常に setupable のまま誤判定する。"""
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **k: MagicMock(
+            returncode=0, stdout="NAME\nloci-distiller:latest\n"
+        ),
+    )
+    assert _ollama_model_pulled("loci-distiller") is True
+
+
+def test_ollama_model_pulled_untagged_lookup_does_not_fuzzy_match_other_names(
+    monkeypatch,
+) -> None:
+    """暗黙 `:latest` 補完は完全一致の代替であって部分一致ではない。"""
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *a, **k: MagicMock(
+            returncode=0, stdout="NAME\nloci-distiller-variant:latest\n"
+        ),
+    )
+    assert _ollama_model_pulled("loci-distiller") is False
 
 
 def test_detect_ollama_ft_superstring_pull_is_not_ready(monkeypatch) -> None:

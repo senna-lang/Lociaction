@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-14
+
+### Added
+- `ollama-ft` now automatically pairs the fine-tuned distillation model
+  with a speculative-decoding drafter (`qwen2.5:0.5b`, `draft_num_predict
+  4`), combined into a local `loci-distiller` Ollama model. `loci init`
+  and `loci distill --setup` create it automatically on first setup
+  (pulling both models, then `ollama create`); output stays deterministic
+  (greedy) since the drafter only speeds up generation, it never changes
+  what the base model would have produced.
+- Existing `ollama-ft` users already configured with the raw fine-tuned
+  model name are upgraded to the drafter-enabled model automatically the
+  next time they run `loci init`, `loci distill --setup`, or an
+  interactive `loci distill` — `config.toml` is rewritten once the
+  drafter is created. This upgrade is attempted only in interactive
+  contexts; non-interactive (hook-triggered) `loci distill` runs never
+  attempt it, so automated distillation never silently starts a network
+  `ollama pull`. Until upgraded, existing configurations keep working
+  unchanged on the raw model.
+
+
 ## [0.4.0] - 2026-09-14
 
 ### Added

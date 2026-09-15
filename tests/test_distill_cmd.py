@@ -7,6 +7,7 @@ unconfigured / not-ready 時の TTY 再選択・非対話 skip・silent fallback
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from lociaction.adapters.model.types import ClientStatus, ModelClient
@@ -14,6 +15,19 @@ from lociaction.cli import app
 from lociaction.db import init_db
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _no_ollama_drafter_upgrade_by_default(monkeypatch):
+    """upgrade_ollama_ft_drafter_if_missing() が実機の ollama を検知して
+    real subprocess を呼ばないよう、既定で「何もしない」に固定する。
+    drafter 自動追加そのものを検証するテストは個別に monkeypatch する。
+    """
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.upgrade_ollama_ft_drafter_if_missing",
+        lambda: None,
+    )
+
 
 _CLAUDE_CLIENT = ModelClient(
     id="claude-cli",
@@ -161,6 +175,117 @@ def test_distill_configured_ready_uses_it_without_prompting(
     assert len(calls) == 1
     assert calls[0].provider == "claude"
 
+
+
+def test_distill_configured_ready_ollama_ft_tty_auto_upgrades_to_drafter(
+    tmp_path, monkeypatch
+) -> None:
+    """既存ユーザーが生の FT モデルのまま ready かつ対話実行なら、drafter を
+    自動で追加し config.toml も書き換え、その回の蒸留から使う。"""
+    from lociaction.config import LOCAL_DISTILL_MODEL
+
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    _write_config(
+        lociaction_dir,
+        f'[distill]\nclient = "ollama-ft"\nmodel = "{LOCAL_DISTILL_MODEL}"\n'
+        'base_url = "http://localhost:11434/v1"\n',
+    )
+    calls: list = []
+    _stub_distill_all(monkeypatch, calls)
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: True)
+
+    raw_status = ClientStatus(
+        id="ollama-ft",
+        label="Ollama (local FT model)",
+        state="ready",
+        reason="ready (no speculative-decoding drafter)",
+        client=_OLLAMA_CLIENT,  # model="ft-model"、_write_config の値とは無関係
+    )
+    drafter_client = ModelClient(
+        id="ollama-ft",
+        provider="openai",
+        model="loci-distiller",
+        base_url="http://localhost:11434/v1",
+        label="Ollama (local FT model)",
+    )
+    check_ready_calls: list[str] = []
+
+    def _fake_check_ready(client_id: str) -> ClientStatus:
+        check_ready_calls.append(client_id)
+        if len(check_ready_calls) == 1:
+            return raw_status
+        return ClientStatus(
+            id="ollama-ft",
+            label="Ollama (local FT model)",
+            state="ready",
+            reason="ready",
+            client=drafter_client,
+        )
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready", _fake_check_ready
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.upgrade_ollama_ft_drafter_if_missing",
+        lambda: (True, "created loci-distiller (drafter: qwen2.5:0.5b)"),
+    )
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 0
+    assert "created loci-distiller" in result.output
+    assert len(calls) == 1
+    assert calls[0].model == "loci-distiller"
+    config = (lociaction_dir / "config.toml").read_text()
+    assert 'model = "loci-distiller"' in config
+
+
+def test_distill_configured_ready_ollama_ft_non_tty_does_not_auto_upgrade(
+    tmp_path, monkeypatch
+) -> None:
+    """非対話（hook 実行）では drafter 自動追加を一切試みない
+    （ネットワーク越しの ollama pull を無言の自動化から起こさないため）。"""
+    from lociaction.config import LOCAL_DISTILL_MODEL
+
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    _write_config(
+        lociaction_dir,
+        f'[distill]\nclient = "ollama-ft"\nmodel = "{LOCAL_DISTILL_MODEL}"\n'
+        'base_url = "http://localhost:11434/v1"\n',
+    )
+    calls: list = []
+    _stub_distill_all(monkeypatch, calls)
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="ollama-ft",
+            label="Ollama (local FT model)",
+            state="ready",
+            reason="ready",
+            client=ModelClient(
+                id="ollama-ft",
+                provider="openai",
+                model=LOCAL_DISTILL_MODEL,
+                base_url="http://localhost:11434/v1",
+                label="Ollama (local FT model)",
+            ),
+        ),
+    )
+    upgrade_calls: list = []
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.upgrade_ollama_ft_drafter_if_missing",
+        lambda: upgrade_calls.append(1),
+    )
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0].model == LOCAL_DISTILL_MODEL
+    assert upgrade_calls == []
+    config = (lociaction_dir / "config.toml").read_text()
+    assert LOCAL_DISTILL_MODEL in config
 
 
 def test_distill_rejects_symlinked_lock_file(tmp_path, monkeypatch) -> None:

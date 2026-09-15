@@ -45,6 +45,18 @@ def _no_distill_clients_by_default(monkeypatch):
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
+@pytest.fixture(autouse=True)
+def _no_ollama_drafter_upgrade_by_default(monkeypatch):
+    """upgrade_ollama_ft_drafter_if_missing() が実機の ollama を検知して
+    real subprocess を呼ばないよう、既定で「何もしない」に固定する。
+    drafter 自動追加そのものを検証するテストは個別に monkeypatch する。
+    """
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.upgrade_ollama_ft_drafter_if_missing",
+        lambda: None,
+    )
+
+
 def _create_jsonl(
     path: Path,
     project_root: Path,
@@ -1063,6 +1075,57 @@ def test_init_setupable_ollama_accepted_writes_config(tmp_path, monkeypatch):
     assert f'model = "{LOCAL_DISTILL_MODEL}"' in config
     assert f'base_url = "{LOCAL_DISTILL_BASE_URL}"' in config
 
+
+
+def test_init_auto_upgrades_existing_ready_raw_model_to_drafter(tmp_path, monkeypatch):
+    """既存ユーザーが生の FT モデルのまま ready（別 project で既に ollama-ft を
+    使っていた等）で `loci init` を実行すると、対話 init は drafter を自動で
+    追加してから discover をやり直し、drafter モデルが config に書かれる。"""
+    from lociaction.adapters.model.types import ClientStatus, ModelClient
+    from lociaction.config import LOCAL_DISTILL_BASE_URL
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+
+    drafter_client = ModelClient(
+        id="ollama-ft",
+        provider="openai",
+        model="loci-distiller",
+        base_url=LOCAL_DISTILL_BASE_URL,
+        label="Ollama (local FT model)",
+    )
+
+    def _fake_discover():
+        return [
+            ClientStatus(
+                id="ollama-ft",
+                label="Ollama (local FT model)",
+                state="ready",
+                reason="ready",
+                client=drafter_client,
+            )
+        ]
+
+    upgrade_calls: list = []
+
+    def _fake_upgrade():
+        upgrade_calls.append(1)
+        return True, "created loci-distiller (drafter: qwen2.5:0.5b)"
+
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.upgrade_ollama_ft_drafter_if_missing",
+        _fake_upgrade,
+    )
+
+    result = runner.invoke(app, ["init"], input="\n")
+
+    assert result.exit_code == 0
+    assert upgrade_calls == [1]
+    assert "created loci-distiller" in result.output
+
+    config = (tmp_path / ".lociaction" / "config.toml").read_text()
+    assert 'model = "loci-distiller"' in config
 
 def _patch_both_ready(monkeypatch):
     from lociaction.adapters.model.types import ClientStatus, ModelClient

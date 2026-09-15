@@ -661,6 +661,7 @@ def _resolve_init_distill_client(
         recommended_id,
         resolve_client,
         setup,
+        upgrade_ollama_ft_drafter_if_missing,
     )
     from lociaction.config import load_config
 
@@ -680,6 +681,13 @@ def _resolve_init_distill_client(
             )
             raise typer.Exit(code=1)
         return status.client
+
+    # 既存ユーザーが生の FT 本体のまま ready なら、対話 init に限り drafter を
+    # 自動で追加する（設計: FTモデル使用時は自動で drafter を付ける）。
+    upgrade = upgrade_ollama_ft_drafter_if_missing()
+    if upgrade is not None:
+        _, upgrade_msg = upgrade
+        typer.echo(upgrade_msg)
 
     statuses = discover()
     for s in statuses:
