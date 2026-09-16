@@ -412,6 +412,42 @@ def save_palace_object(
         con.close()
 
 
+def has_pending_work(
+    db_path: Path, *, limit: int | None = None, distill_min_chars: int = 100
+) -> bool:
+    """蒸留対象が1件でもあるかを安価に確認する。
+
+    llamacpp-ft のような重い backend（llama-server の起動＝数GBモデルロード）を
+    無駄に立ち上げないよう、`distill_all` を呼ぶ前に呼び出し側が使う。
+    skip 対象マークは `distill_all` と同じ条件を先に適用してから数える —
+    そうしないと 1-exchange セッションや短すぎる exchange を「保留あり」と
+    誤判定し、結局 0 件のまま backend だけ起動してしまう。
+    """
+    if limit is not None and limit <= 0:
+        return False
+    from lociaction.db import get_connection
+
+    con = get_connection(db_path)
+    try:
+        con.execute(
+            """
+            UPDATE exchanges SET distilled_at = 'skipped', distill_status = 'skipped'
+            WHERE distilled_at IS NULL
+              AND ((SELECT COUNT(*) FROM exchanges e2
+                    WHERE e2.conversation_id = exchanges.conversation_id) < 2
+                   OR LENGTH(user_content) + LENGTH(agent_content) < ?)
+        """,
+            (distill_min_chars,),
+        )
+        con.commit()
+        row = con.execute(
+            "SELECT 1 FROM exchanges WHERE distill_status = 'pending' LIMIT 1"
+        ).fetchone()
+        return row is not None
+    finally:
+        con.close()
+
+
 def distill_all(
     db_path: Path,
     limit: int | None = None,

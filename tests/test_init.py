@@ -992,22 +992,8 @@ def _patch_setupable_llamacpp_only(monkeypatch):
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
 
 
-def test_init_setupable_llamacpp_declined_leaves_unconfigured(tmp_path, monkeypatch):
-    """setup offer を断ると Ready 0件のまま unconfigured で init が成功する"""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".git").mkdir()
-    _patch_setupable_llamacpp_only(monkeypatch)
-
-    result = runner.invoke(app, ["init"], input="n\n")
-    assert result.exit_code == 0
-    assert "Set up llama.cpp" in result.output
-
-    config = (tmp_path / ".lociaction" / "config.toml").read_text()
-    assert '\nclient = "' not in config
-
-
-def test_init_setupable_llamacpp_accepted_writes_config(tmp_path, monkeypatch):
-    """setup offer を承諾し setup() が成功すると Ready 化した client が config に書かれる"""
+def test_init_setupable_llamacpp_selected_runs_setup(tmp_path, monkeypatch):
+    """一覧の setupable llamacpp-ft を空 Enter で選ぶと setup() して config に書く"""
     from lociaction.adapters.model.types import ClientStatus, ModelClient
     from lociaction.config import LOCAL_DISTILL_MODEL
 
@@ -1021,26 +1007,14 @@ def test_init_setupable_llamacpp_accepted_writes_config(tmp_path, monkeypatch):
         base_url=None,
         label="llama.cpp (local FT + speculative decoding)",
     )
-    call_count = {"n": 0}
 
     def _fake_discover():
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return [
-                ClientStatus(
-                    id="llamacpp-ft",
-                    label="llama.cpp (local FT + speculative decoding)",
-                    state="setupable",
-                    reason="model not pulled",
-                )
-            ]
         return [
             ClientStatus(
                 id="llamacpp-ft",
                 label="llama.cpp (local FT + speculative decoding)",
-                state="ready",
-                reason="ready",
-                client=ready_client,
+                state="setupable",
+                reason="llama-server binary not found",
             )
         ]
 
@@ -1052,10 +1026,21 @@ def test_init_setupable_llamacpp_accepted_writes_config(tmp_path, monkeypatch):
 
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
     monkeypatch.setattr("lociaction.adapters.model.registry.setup", _fake_setup)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
+            state="ready",
+            reason="ready",
+            client=ready_client,
+        ),
+    )
 
-    result = runner.invoke(app, ["init"], input="y\n\n")
+    result = runner.invoke(app, ["init"], input="\n")
     assert result.exit_code == 0
     assert setup_calls == ["llamacpp-ft"]
+    assert "needs setup" in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "llamacpp-ft"' in config
@@ -1130,8 +1115,8 @@ def test_init_select_claude_cli_from_ready_list(tmp_path, monkeypatch):
     assert 'client = "claude-cli"' in config
 
 
-def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
-    """--no-local-distiller は setupable な llamacpp-ft の setup offer だけをスキップする"""
+def test_init_no_local_distiller_flag_hides_setupable_llamacpp(tmp_path, monkeypatch):
+    """--no-local-distiller は setupable な llamacpp-ft を一覧から外す"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     _patch_setupable_llamacpp_only(monkeypatch)
@@ -1145,7 +1130,7 @@ def test_init_no_local_distiller_flag_skips_setup_offer(tmp_path, monkeypatch):
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
     assert setup_called == []
-    assert "Set up llama.cpp" not in result.output
+    assert "llamacpp-ft" not in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert '\nclient = "' not in config

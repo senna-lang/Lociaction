@@ -21,46 +21,54 @@ def _is_interactive() -> bool:
 
 def _print_client_list(statuses, recommended: str | None) -> None:
     for i, s in enumerate(statuses, start=1):
-        mark = " (recommended)" if s.id == recommended else ""
-        typer.echo(f"  {i}. {s.label} [{s.id}]{mark}")
+        marks: list[str] = []
+        if s.id == recommended:
+            marks.append("recommended")
+        if s.state == "setupable":
+            marks.append("needs setup")
+        suffix = f" ({', '.join(marks)})" if marks else ""
+        typer.echo(f"  {i}. {s.label} [{s.id}]{suffix}")
 
 
-def prompt_client_selection(root) -> ModelClient | None:
-    """discover → setup offer → Ready 一覧 → 選択。
+def prompt_client_selection(
+    root, *, include_setupable: bool = True
+) -> ModelClient | None:
+    """discover → Ready+setupable 一覧 → 選択。setupable を選んだら setup() する。
 
-    config は書き換えず ModelClient を返すだけ（runtime reselect は once — save は
-    `loci distill --setup` のみ）。
+    config は書き換えず ModelClient を返すだけ（save は `loci distill --setup`）。
     """
     from lociaction.adapters.model.registry import (
+        check_ready,
         discover,
-        ready_clients,
         recommended_id,
         resolve_client,
+        selectable_clients,
         setup,
     )
     from lociaction.config import load_config
 
     statuses = discover()
-    for s in statuses:
-        if s.state == "setupable":
-            typer.echo(f"{s.label}: {s.reason}")
-            if typer.confirm(f"Set up {s.label} now?", default=False):
-                ok, msg = setup(s.id)
-                typer.echo(msg)
-                if ok:
-                    statuses = discover()
-
-    ready = ready_clients(statuses)
-    if not ready:
+    choices = selectable_clients(statuses, include_setupable=include_setupable)
+    if not choices:
         typer.echo("No distill client is ready. Run `loci distill --setup` later.")
         return None
 
     rec = recommended_id(statuses)
-    _print_client_list(ready, rec)
-    default_idx = next((i for i, s in enumerate(ready, 1) if s.id == rec), 1)
+    typer.echo("Available distill clients:")
+    _print_client_list(choices, rec)
+    default_idx = next((i for i, s in enumerate(choices, 1) if s.id == rec), 1)
     raw = typer.prompt("Select client", default=str(default_idx)).strip()
-    idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(ready) else default_idx
-    chosen = ready[idx - 1]
+    idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(choices) else default_idx
+    chosen = choices[idx - 1]
+    if chosen.state == "setupable":
+        ok, msg = setup(chosen.id)
+        typer.echo(msg)
+        if not ok:
+            return None
+        chosen = check_ready(chosen.id)
+        if chosen.state != "ready":
+            typer.echo(f"Setup did not make {chosen.id} ready: {chosen.reason}")
+            return None
     return chosen.client or resolve_client(chosen.id, load_config(root))
 
 
@@ -255,13 +263,26 @@ def distill(
             )
 
         from lociaction.adapters.model.llama_server import LlamaServerError
+        from lociaction.distiller import has_pending_work
 
         try:
-            with bind_runtime_backend(backend, root) as bound:
+            if has_pending_work(
+                db, limit=limit, distill_min_chars=cfg.distill_min_chars
+            ):
+                with bind_runtime_backend(backend, root) as bound:
+                    count, err_count = distill_all(
+                        db,
+                        limit=limit,
+                        backend=bound,
+                        on_progress=_on_progress,
+                        project_root=str(root),
+                        distill_min_chars=cfg.distill_min_chars,
+                    )
+            else:
                 count, err_count = distill_all(
                     db,
                     limit=limit,
-                    backend=bound,
+                    backend=backend,
                     on_progress=_on_progress,
                     project_root=str(root),
                     distill_min_chars=cfg.distill_min_chars,

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+- `llamacpp-ft` always appears in `loci distill --setup` / `loci init`
+  (binary missing is setupable, not hidden). Selecting it finds
+  `llama-server` including `~/llama.cpp/build/bin`, runs
+  `brew install llama.cpp` if needed, and `ollama pull`s the FT + draft
+  models. Apple Silicon defaults to `-ngl 99`.
+
+### Fixed
+- `loci distill` no longer starts `llama-server` (a multi-GB model load)
+  when there are 0 exchanges to distill. `distiller.has_pending_work`
+  runs the same skip-marking + pending check as `distill_all` before
+  binding the runtime backend.
+
 ## [0.6.0] - 2026-09-15
 
 ### Added

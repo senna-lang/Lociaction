@@ -521,19 +521,29 @@ def init(
             )
             from lociaction.adapters.model.llama_server import LlamaServerError
             from lociaction.cli.distill_cmd import bind_runtime_backend
+            from lociaction.distiller import has_pending_work
 
-            try:
-                with bind_runtime_backend(backend, root) as bound:
-                    count, err_count = distill_all(
-                        db,
-                        backend=bound,
-                        on_progress=_on_progress,
-                        project_root=str(root),
-                        distill_min_chars=cfg.distill_min_chars,
-                    )
-            except LlamaServerError as exc:
-                typer.echo(sanitize_terminal_text(str(exc)), err=True)
-                raise typer.Exit(code=1) from None
+            if has_pending_work(db, distill_min_chars=cfg.distill_min_chars):
+                try:
+                    with bind_runtime_backend(backend, root) as bound:
+                        count, err_count = distill_all(
+                            db,
+                            backend=bound,
+                            on_progress=_on_progress,
+                            project_root=str(root),
+                            distill_min_chars=cfg.distill_min_chars,
+                        )
+                except LlamaServerError as exc:
+                    typer.echo(sanitize_terminal_text(str(exc)), err=True)
+                    raise typer.Exit(code=1) from None
+            else:
+                count, err_count = distill_all(
+                    db,
+                    backend=backend,
+                    on_progress=_on_progress,
+                    project_root=str(root),
+                    distill_min_chars=cfg.distill_min_chars,
+                )
             typer.echo(f"Distilled {count} exchange(s).")
             if err_count > 0:
                 typer.echo(
@@ -657,21 +667,18 @@ def _ask_run_distill_now(distill_count: int) -> bool:
 def _resolve_init_distill_client(
     root: Path, *, no_local_distiller: bool, distill_client_flag: str | None
 ):
-    """discover → (optional) setup offer → Ready 一覧 → 選択。
+    """discover → Ready+setupable 一覧 → 選択。
 
     Returns: 選ばれた ModelClient、または unconfigured を意味する None。
-    `--distill-client` 明示指定時は Ready でなければエラー終了する（別 client に落とさない）。
+    `--distill-client` 明示指定時は Ready でなければ setup を試み、それでも
+    Ready でなければエラー終了する（別 client に落とさない）。
     """
     from lociaction.adapters.model.registry import (
         DISCOVERABLE_CLIENT_IDS,
         check_ready,
-        discover,
-        ready_clients,
-        recommended_id,
-        resolve_client,
         setup,
     )
-    from lociaction.config import load_config
+    from lociaction.cli.distill_cmd import prompt_client_selection
 
     if distill_client_flag is not None:
         if distill_client_flag not in DISCOVERABLE_CLIENT_IDS:
@@ -682,6 +689,12 @@ def _resolve_init_distill_client(
             )
             raise typer.Exit(code=1)
         status = check_ready(distill_client_flag)
+        if status.state == "setupable":
+            ok, msg = setup(distill_client_flag)
+            typer.echo(msg)
+            if not ok:
+                raise typer.Exit(code=1)
+            status = check_ready(distill_client_flag)
         if status.state != "ready" or status.client is None:
             typer.echo(
                 f"--distill-client {distill_client_flag} is not ready: {status.reason}",
@@ -690,36 +703,9 @@ def _resolve_init_distill_client(
             raise typer.Exit(code=1)
         return status.client
 
-    statuses = discover()
-    for s in statuses:
-        if s.state == "setupable" and not no_local_distiller:
-            typer.echo(f"\n{s.label}: {s.reason}")
-            if typer.confirm(f"Set up {s.label} now?", default=False):
-                ok, msg = setup(s.id)
-                typer.echo(msg)
-                if ok:
-                    statuses = discover()
-
-    ready = ready_clients(statuses)
-    if not ready:
-        typer.echo(
-            "\nNo distill client is ready. Leaving distill unconfigured — "
-            "run `loci distill --setup` later."
-        )
-        return None
-
-    rec = recommended_id(statuses)
-    typer.echo("\nAvailable distill clients:")
-    default_idx = 1
-    for i, s in enumerate(ready, start=1):
-        mark = " (recommended)" if s.id == rec else ""
-        typer.echo(f"  {i}. {s.label} [{s.id}]{mark}")
-        if s.id == rec:
-            default_idx = i
-    raw = typer.prompt("Select client", default=str(default_idx)).strip()
-    idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(ready) else default_idx
-    chosen = ready[idx - 1]
-    return chosen.client or resolve_client(chosen.id, load_config(root))
+    return prompt_client_selection(
+        root, include_setupable=not no_local_distiller
+    )
 
 
 def _ask_distill_priority() -> str:

@@ -180,6 +180,19 @@ def test_recommended_id_prefers_llamacpp_ft() -> None:
     assert recommended_id(statuses) == "llamacpp-ft"
 
 
+def test_recommended_id_prefers_setupable_llamacpp_ft() -> None:
+    statuses = [
+        ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
+        ClientStatus(
+            id="llamacpp-ft",
+            label="llama.cpp",
+            state="setupable",
+            reason="llama-server binary not found",
+        ),
+    ]
+    assert recommended_id(statuses) == "llamacpp-ft"
+
+
 def test_recommended_id_falls_back_to_first_ready_when_ft_not_ready() -> None:
     statuses = [
         ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
@@ -190,6 +203,23 @@ def test_recommended_id_falls_back_to_first_ready_when_ft_not_ready() -> None:
 def test_recommended_id_none_when_no_ready() -> None:
     statuses = [ClientStatus(id="a", label="A", state="unavailable", reason="no")]
     assert recommended_id(statuses) is None
+
+
+def test_selectable_clients_includes_setupable() -> None:
+    from lociaction.adapters.model.registry import selectable_clients
+
+    statuses = [
+        ClientStatus(id="llamacpp-ft", label="L", state="setupable", reason="x"),
+        ClientStatus(id="claude-cli", label="C", state="ready", reason="ready"),
+        ClientStatus(id="gemini-cli", label="G", state="unavailable", reason="no"),
+    ]
+    assert [s.id for s in selectable_clients(statuses)] == [
+        "llamacpp-ft",
+        "claude-cli",
+    ]
+    assert [s.id for s in selectable_clients(statuses, include_setupable=False)] == [
+        "claude-cli"
+    ]
 
 
 # ---- setup ----
@@ -626,8 +656,9 @@ def _patch_llamacpp_blobs(monkeypatch, *, binary: bool, tags: set[str]) -> None:
 def test_detect_llamacpp_ft_binary_missing(monkeypatch) -> None:
     _patch_llamacpp_blobs(monkeypatch, binary=False, tags=set())
     status = detect_llamacpp_ft()
-    assert status.state == "unavailable"
+    assert status.state == "setupable"
     assert status.client is None
+    assert "llama-server" in status.reason
 
 
 def test_detect_llamacpp_ft_base_not_pulled(monkeypatch) -> None:
@@ -668,6 +699,10 @@ def test_detect_llamacpp_ft_ready_when_draft_opted_out(monkeypatch) -> None:
 
 def test_setup_llamacpp_ft_binary_missing(monkeypatch) -> None:
     _patch_llamacpp_blobs(monkeypatch, binary=False, tags=set())
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.shutil.which",
+        lambda name: None,
+    )
     ok, msg = setup("llamacpp-ft")
     assert ok is False
     assert "llama-server" in msg

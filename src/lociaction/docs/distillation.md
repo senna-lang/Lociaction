@@ -52,15 +52,15 @@ loci distill --setup
 
 Ollama's `DRAFT` Modelfile path cannot accelerate this GGUF fine-tune (it is safetensors/MTP-only). `llamacpp-ft` instead starts an ephemeral `llama-server` for each `loci distill` run, with `--model-draft` against the same GGUF blobs Ollama already stored.
 
-Requirements:
+It always appears in `loci distill --setup` / `loci init` as long as it is setupable or ready (binary missing is setupable, not hidden). Selecting it:
 
-- `llama-server` on `PATH`, or `LOCI_LLAMACPP_SERVER` pointing at the binary
-- the FT model blob (`loci distill --setup` can `ollama pull` it)
-- draft model `qwen2.5:0.5b` by default (`ollama pull qwen2.5:0.5b`, or set `LOCI_LLAMACPP_DRAFT_MODEL=` to opt out)
+1. finds `llama-server` (`LOCI_LLAMACPP_SERVER`, `PATH`, `~/llama.cpp/build/bin/llama-server`, `~/.local/bin/llama-server`)
+2. if missing, runs `brew install llama.cpp` when Homebrew is available
+3. `ollama pull`s the FT model and draft `qwen2.5:0.5b`
 
-The process binds `127.0.0.1` only and is stopped when the distill batch ends. GPU offload is left to llama.cpp unless you set `LOCI_LLAMACPP_GPU_LAYERS` / `LOCI_LLAMACPP_DRAFT_GPU_LAYERS`. Logs: `.lociaction/logs/llama-server.log`.
+Apple Silicon defaults to full Metal offload (`-ngl 99`). Override with `LOCI_LLAMACPP_GPU_LAYERS` / `LOCI_LLAMACPP_DRAFT_GPU_LAYERS`. Opt out of the draft with `LOCI_LLAMACPP_DRAFT_MODEL=`. Logs: `.lociaction/logs/llama-server.log`.
 
-Selecting/setting up a client is still TTY-gated. An already-configured `llamacpp-ft` may run from a hook; it will not download models without you.
+`--no-local-distiller` hides a still-setupable `llamacpp-ft` from the list.
 
 Any OpenAI-compatible local endpoint works as `openai-compat` (both `model` and `base_url` required). No `Authorization` header is sent unless the invoking user's own `LOCIACTION_DISTILL_API_KEY` environment variable is set — project config cannot set or request an API key, so a hostile `.lociaction/config.toml` cannot make lociaction send credentials it doesn't already have:
 

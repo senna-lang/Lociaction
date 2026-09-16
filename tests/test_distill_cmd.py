@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.cli import app
-from lociaction.db import init_db
+from lociaction.db import get_connection, init_db
 
 runner = CliRunner()
 
@@ -50,6 +50,22 @@ def _stub_distill_all(monkeypatch, calls: list):
         return (0, 0)
 
     monkeypatch.setattr("lociaction.distiller.distill_all", _fake)
+
+
+def _insert_pending_exchange_pair(lociaction_dir) -> None:
+    """distill_min_chars(既定100) と skip-1-exchange 条件の両方を満たす
+    pending exchange を2件挿入する（有無で llama-server 起動要否をテストする）。"""
+    con = get_connection(lociaction_dir / "memory.db")
+    long_text = "x" * 80
+    for i in range(2):
+        con.execute(
+            "INSERT INTO exchanges "
+            "(id, conversation_id, ply_start, ply_end, user_content, agent_content) "
+            "VALUES (?, 'conv1', ?, ?, ?, ?)",
+            (f"ex{i}", i * 2, i * 2 + 1, long_text, long_text),
+        )
+    con.commit()
+    con.close()
 
 
 # ---- unconfigured ----
@@ -169,6 +185,7 @@ def test_distill_llamacpp_ft_non_tty_starts_server(
     選択/セットアップの TTY ゲートとは独立。"""
     lociaction_dir = _init_project(tmp_path, monkeypatch)
     _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
+    _insert_pending_exchange_pair(lociaction_dir)
     calls: list = []
     _stub_distill_all(monkeypatch, calls)
     monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
@@ -217,6 +234,7 @@ def test_distill_llamacpp_ft_start_failure_exits_nonzero(
 
     lociaction_dir = _init_project(tmp_path, monkeypatch)
     _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
+    _insert_pending_exchange_pair(lociaction_dir)
     calls: list = []
     _stub_distill_all(monkeypatch, calls)
     monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
@@ -244,6 +262,46 @@ def test_distill_llamacpp_ft_start_failure_exits_nonzero(
     assert "LOCI_LLAMACPP_DRAFT_MODEL" in result.output or "not pulled" in result.output
     assert calls == []
 
+
+
+def test_distill_llamacpp_ft_skips_server_when_no_pending_work(
+    tmp_path, monkeypatch
+) -> None:
+    """pending exchange が無ければ llama-server を起動しない
+    （数GBモデルロードのコストを無駄に払わない）。"""
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    _write_config(lociaction_dir, '[distill]\nclient = "llamacpp-ft"\n')
+    calls: list = []
+    _stub_distill_all(monkeypatch, calls)
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="llamacpp-ft",
+            label="llama.cpp (local FT + speculative decoding)",
+            state="ready",
+            reason="ready",
+            client=_LLAMACPP_CLIENT,
+        ),
+    )
+
+    def _boom(*a, **k):
+        raise AssertionError("llama-server must not start with no pending work")
+
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.spec_for_model", _boom
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.LlamaServerProcess", _boom
+    )
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 0
+    assert "Distilled 0 exchange(s)." in result.output
+    assert len(calls) == 1
+    assert calls[0].client_id == "llamacpp-ft"
+    assert calls[0].base_url is None
 
 
 def test_distill_rejects_symlinked_lock_file(tmp_path, monkeypatch) -> None:

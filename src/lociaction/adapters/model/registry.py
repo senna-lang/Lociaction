@@ -31,9 +31,9 @@ DISCOVERABLE_CLIENT_IDS = (
 _LLAMACPP_FT_LABEL = "llama.cpp (local FT + speculative decoding)"
 
 def detect_llamacpp_ft() -> ClientStatus:
-    """llama-server binary + FT/draft GGUF blob の有無を確認する。
+    """llama-server + FT/draft GGUF blob の有無を確認する。
 
-    binary 欠如は unavailable（案内のみ）。blob 欠如は setupable（ollama pull）。
+    binary 欠如も setupable（選択後に brew / pull で揃える）。一覧から消さない。
     """
     from lociaction.adapters.model.llama_server import (
         configured_draft_model,
@@ -48,8 +48,8 @@ def detect_llamacpp_ft() -> ClientStatus:
         return ClientStatus(
             id="llamacpp-ft",
             label=_LLAMACPP_FT_LABEL,
-            state="unavailable",
-            reason="llama-server binary not found in PATH",
+            state="setupable",
+            reason="llama-server binary not found",
         )
     try:
         resolve_model_blob(LOCAL_DISTILL_MODEL)
@@ -252,22 +252,35 @@ def ready_clients(statuses: list[ClientStatus]) -> list[ClientStatus]:
     return [s for s in statuses if s.state == "ready"]
 
 
+def selectable_clients(
+    statuses: list[ClientStatus], *, include_setupable: bool = True
+) -> list[ClientStatus]:
+    """選択リスト: Ready に加え、opt-in なら setupable も出す。"""
+    out: list[ClientStatus] = []
+    for status in statuses:
+        if status.state == "ready":
+            out.append(status)
+        elif include_setupable and status.state == "setupable":
+            out.append(status)
+    return out
+
+
 def recommended_id(statuses: list[ClientStatus]) -> str | None:
-    """Ready なら llamacpp-ft、なければ最初の Ready、なければ None。"""
+    """llamacpp-ft が ready/setupable ならそれを推奨。なければ最初の Ready。"""
+    for status in statuses:
+        if status.id == "llamacpp-ft" and status.state in ("ready", "setupable"):
+            return status.id
     ready = ready_clients(statuses)
     if not ready:
         return None
-    for s in ready:
-        if s.id == "llamacpp-ft":
-            return s.id
     return ready[0].id
 
 
 def setup(client_id: str) -> tuple[bool, str]:
     """setupable な client を Ready にする。
 
-    llamacpp-ft は `ollama pull` で GGUF blob を揃える。llama-server / ollama
-    自体のインストールは実行しない — 案内のみ（D6）。
+    llamacpp-ft は llama-server を探し、無ければ `brew install llama.cpp`、
+    続けて FT/draft を `ollama pull` する。
     """
     if client_id != "llamacpp-ft":
         return False, f"no automated setup for {client_id}"
@@ -297,17 +310,17 @@ def _pull_ollama_model(model: str) -> tuple[bool, str]:
 def _setup_llamacpp_ft() -> tuple[bool, str]:
     from lociaction.adapters.model.llama_server import (
         configured_draft_model,
-        find_llama_server_binary,
+        ensure_llama_server_binary,
     )
     from lociaction.adapters.model.ollama_blobs import (
         OllamaBlobNotFound,
         resolve_model_blob,
     )
 
-    if find_llama_server_binary() is None:
+    if ensure_llama_server_binary() is None:
         return False, (
-            "llama-server binary not found — install llama.cpp, "
-            "put llama-server on PATH, or set LOCI_LLAMACPP_SERVER"
+            "llama-server not found. Install llama.cpp "
+            "(e.g. `brew install llama.cpp`) and retry."
         )
     pulled: list[str] = []
     try:

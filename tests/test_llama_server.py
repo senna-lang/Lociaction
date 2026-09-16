@@ -19,6 +19,7 @@ from lociaction.adapters.model.llama_server import (
     LlamaServerSpec,
     build_llama_server_args,
     configured_draft_model,
+    default_gpu_layers,
     find_llama_server_binary,
 )
 
@@ -135,10 +136,54 @@ def test_find_binary_falls_back_to_which(monkeypatch, tmp_path: Path) -> None:
     assert find_llama_server_binary() == binary
 
 
-def test_find_binary_none_when_missing(monkeypatch) -> None:
+def test_find_binary_none_when_missing(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("LOCI_LLAMACPP_SERVER", raising=False)
-    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.shutil.which", lambda name: None
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.Path.home",
+        lambda *a, **k: tmp_path,
+    )
     assert find_llama_server_binary() is None
+
+
+def test_find_binary_home_llama_cpp_build(monkeypatch, tmp_path: Path) -> None:
+    binary = tmp_path / "llama.cpp" / "build" / "bin" / "llama-server"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.delenv("LOCI_LLAMACPP_SERVER", raising=False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.shutil.which", lambda name: None
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.Path.home",
+        lambda *a, **k: tmp_path,
+    )
+    assert find_llama_server_binary() == binary
+
+
+def test_default_gpu_layers_apple_silicon(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.sys.platform", "darwin"
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.platform.machine",
+        lambda: "arm64",
+    )
+    assert default_gpu_layers() == 99
+
+
+def test_default_gpu_layers_non_darwin(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.sys.platform", "linux"
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server.platform.machine",
+        lambda: "x86_64",
+    )
+    assert default_gpu_layers() is None
 
 
 def test_configured_draft_model_default(monkeypatch) -> None:

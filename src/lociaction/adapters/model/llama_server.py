@@ -11,9 +11,11 @@ embedder_server は Unix socket 常駐だが、llama-server は TCP 必須かつ
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -58,7 +60,11 @@ class LlamaServerSpec:
 
 
 def find_llama_server_binary() -> Path | None:
-    """`LOCI_LLAMACPP_SERVER` または PATH 上の llama-server を返す。"""
+    """env → PATH → よくあるローカル build 場所 の順で llama-server を探す。
+
+    `LOCI_LLAMACPP_SERVER` がセットされているのに実在しない場合は探索しない
+    （明示指定を優先し、誤ったパスを別の binary で黙って置き換えない）。
+    """
     raw = os.environ.get(LLAMACPP_SERVER_BINARY_ENV, "").strip()
     if raw:
         path = Path(raw).expanduser()
@@ -66,7 +72,49 @@ def find_llama_server_binary() -> Path | None:
             return path
         return None
     found = shutil.which("llama-server")
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    for candidate in _well_known_llama_server_paths():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _well_known_llama_server_paths() -> list[Path]:
+    home = Path.home()
+    return [
+        home / "llama.cpp" / "build" / "bin" / "llama-server",
+        home / ".local" / "bin" / "llama-server",
+    ]
+
+
+def default_gpu_layers() -> int | None:
+    """Apple Silicon では Metal 全層 offload。それ以外は llama.cpp 既定に任せる。"""
+    if sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
+        return 99
+    return None
+
+
+def ensure_llama_server_binary() -> Path | None:
+    """見つからなければ `brew install llama.cpp` を試みる（選択後の自動 setup 用）。"""
+    found = find_llama_server_binary()
+    if found is not None:
+        return found
+    brew = shutil.which("brew")
+    if brew is None:
+        return None
+    try:
+        result = subprocess.run(
+            [brew, "install", "llama.cpp"],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return find_llama_server_binary()
 
 
 def configured_draft_model() -> str | None:
@@ -109,15 +157,21 @@ def spec_for_model(model_tag: str | None) -> LlamaServerSpec:
                 f"{LLAMACPP_DRAFT_MODEL_ENV} to disable speculative decoding."
             ) from exc
 
+    gpu_layers = _optional_int_env(LLAMACPP_GPU_LAYERS_ENV, minimum=0)
+    if gpu_layers is None:
+        gpu_layers = default_gpu_layers()
+    draft_gpu_layers = _optional_int_env(
+        LLAMACPP_DRAFT_GPU_LAYERS_ENV, minimum=0
+    )
+    if draft_gpu_layers is None:
+        draft_gpu_layers = gpu_layers
     return LlamaServerSpec(
         binary=binary,
         model=model,
         draft_model=draft_model,
         draft_max=_int_env(LLAMACPP_DRAFT_MAX_ENV, LLAMACPP_DRAFT_MAX, minimum=1),
-        gpu_layers=_optional_int_env(LLAMACPP_GPU_LAYERS_ENV, minimum=0),
-        draft_gpu_layers=_optional_int_env(
-            LLAMACPP_DRAFT_GPU_LAYERS_ENV, minimum=0
-        ),
+        gpu_layers=gpu_layers,
+        draft_gpu_layers=draft_gpu_layers,
         health_timeout=float(
             _int_env(
                 LLAMACPP_HEALTH_TIMEOUT_ENV,

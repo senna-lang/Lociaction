@@ -17,6 +17,7 @@ from lociaction.distiller import (
     distill_all,
     distill_exchange,
     extract_files_touched,
+    has_pending_work,
     save_palace_object,
 )
 from lociaction.llm import DistillBackend
@@ -891,6 +892,76 @@ def test_save_palace_object_saves_vec(tmp_path) -> None:
     row = con.execute("SELECT palace_id FROM vec_palace").fetchone()
     assert row is not None
     con.close()
+
+
+# --- has_pending_work ---
+
+
+def test_has_pending_work_true_when_pending_exists(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1")
+    assert has_pending_work(db_path) is True
+
+
+def test_has_pending_work_false_when_empty(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    assert has_pending_work(db_path) is False
+
+
+def test_has_pending_work_false_when_all_distilled(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1")
+    con = get_connection(db_path)
+    con.execute(
+        "UPDATE exchanges SET distilled_at = '2026-01-01', distill_status = 'distilled' "
+        "WHERE id = 'ex1'"
+    )
+    con.commit()
+    con.close()
+    assert has_pending_work(db_path) is False
+
+
+def test_has_pending_work_false_for_single_exchange_conversation(tmp_path) -> None:
+    """1-exchange セッションは skip 対象なので pending 扱いしない。"""
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    con = get_connection(db_path)
+    con.execute(
+        "INSERT INTO conversations (id, source_path) VALUES ('c1', '/p.jsonl')"
+    )
+    con.execute(
+        "INSERT INTO exchanges (id, conversation_id, ply_start, ply_end, "
+        "user_content, agent_content) VALUES ('ex1', 'c1', 0, 1, ?, ?)",
+        (LONG_TEXT, LONG_TEXT),
+    )
+    con.commit()
+    con.close()
+    assert has_pending_work(db_path) is False
+
+
+def test_has_pending_work_false_for_short_content(tmp_path) -> None:
+    """distill_min_chars 未満は skip 対象なので pending 扱いしない。"""
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1", user_text="short", agent_text="short")
+    assert has_pending_work(db_path) is False
+
+
+def test_has_pending_work_false_when_limit_zero(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1")
+    assert has_pending_work(db_path, limit=0) is False
+
+
+def test_has_pending_work_true_when_limit_positive(tmp_path) -> None:
+    db_path = tmp_path / "memory.db"
+    init_db(db_path)
+    _make_exchange(db_path, "ex1")
+    assert has_pending_work(db_path, limit=1) is True
 
 
 # --- distill_all ---
