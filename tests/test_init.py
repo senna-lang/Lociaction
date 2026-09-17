@@ -248,7 +248,7 @@ def test_init_prints_banner(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "█████  ███   ████ █████" in result.output
     assert r"|_____\___/ \____|___/_/   \_\____|" not in result.output
-    assert "memory palace for AI coding agents" in result.output
+    assert "code-aware and semantic recall for your coding agent" in result.output
 
 
 def test_init_creates_agents_md_section(tmp_path, monkeypatch):

@@ -6,29 +6,38 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
-An AI coding agent recalls everything it has done through two recall primitives — `loci search` and `loci context` — plus `loci recall`, a resume-style browser over past sessions. The agent reaches for the right call without hesitation, and restores past decisions, conversations, and exact code locations in under 0.2 seconds.
+**Give your coding agent code-aware and semantic recall.**
 
-The CLI command `loci` is designed to be **called by the agent itself** — running `loci search "..." --json` from within a prompt. *(The name comes from the [Method of Loci](https://en.wikipedia.org/wiki/Method_of_loci) — the memory-palace technique. Under the hood, conversations are distilled into "palace objects"; see [How It Works](#how-it-works). The architecture extends the conversational memory model from [arXiv:2603.13017](https://arxiv.org/abs/2603.13017) for coding agents.)*
+Lociaction is a private, project-local memory bank for coding agents. With the corresponding lifecycle hook installed, it captures work from Claude Code, Codex CLI, Oh My Pi, OpenCode, or Grok, then lets any supported agent find past decisions or pick up an earlier session.
 
-> **Harnesses:** Claude Code, Codex CLI, Oh My Pi, OpenCode, and Grok session logs are indexed into the same exchange, code-touch, symbol, search, context, and `show` contracts. Distillation is a separate, independent choice — `loci distill` runs the same configured client (`claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`, a local Ollama model, or any OpenAI-compatible endpoint) against every undistilled exchange regardless of which harness produced it.
+After the embedding server's first load, warm `loci search` calls stay **under ~0.2 seconds**. Session distillation can also stay on-device with [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller), a purpose-built SLM fine-tuned specifically for session-memory distillation.
+
+## Why Lociaction
+
+- **Memory that writes itself** — Once installed, native lifecycle hooks index completed turns and prepare memory at session start. No manual notes to maintain.
+- **Recall from the code you are looking at** — Point `loci context` at a file, symbol, or line. tree-sitter connects that location to the decisions and conversations behind it.
+- **Pick up work across harnesses** — Install a hook for each harness and they index into the same project memory. `loci recall` finds relevant sessions and opens a concise, exchange-by-exchange digest.
+- **Local when privacy matters** — Lociaction's index stays under `.lociaction/`. Select the fine-tuned local distiller to keep exchange text off cloud APIs.
+- **Summaries with receipts** — Start with a distilled memory, then use `loci show` to retrieve the original exchange copied into the project-local index, along with its neighboring context.
+- **Built for agents, not dashboards** — A small CLI surface and stable JSON output provide recall without keeping MCP tool schemas in the context window.
+
+The name comes from the [Method of Loci](https://en.wikipedia.org/wiki/Method_of_loci), the memory-palace technique. Lociaction distills conversations into structured "palace objects"; see [How It Works](#how-it-works).
 
 ## Minimal Interface
 
-The recall interface is built from two primitives, plus one composite:
+The agent chooses among two recall primitives and one session browser:
 
-- **`loci search "query"`** — semantic search over past conversations
-- **`loci context`** — reverse lookup, by code symbol (`--symbol "name"`) or git branch (`--branch "name"`)
-  - tree-sitter symbol resolution (Python / TypeScript / Go / Rust / Java / C# / Ruby) lets agents understand implementation intent before editing
-  - `--branch "name"` recalls what was done and discussed on a specific git branch (also available as `loci search "query" --branch "name"`)
-- **`loci recall`** — resume-style session browser: bare for the newest sessions, with a keyword query to rank sessions by relevance instead of recency, `--session ID` for one session's one-line-per-exchange digest; `--file`/`--branch` filter either mode
+- **`loci context <file>[:<symbol-or-line>]`** — start from the code currently being viewed or edited; branch lookup is also available with `--branch`
+- **`loci search "query"`** — semantically recall relevant memories from past conversations
+- **`loci recall ["query"]`** — browse the newest sessions or rank them by relevance; add `--session ID` for one session's digest
 
-That's deliberate. The user here is the agent, and an agent handed a 50-tool palette hesitates, mis-picks, and burns tokens just deciding which to call. With a surface this small — and no MCP tool schemas sitting resident in the context window — the agent reaches for the right call the first time, every time. *(When the full transcript is needed, `loci show "<exchange-id>"` expands a search result to its stored verbatim source.)*
+When the distilled result is not enough, `loci show "<exchange-id>"` retrieves the stored verbatim exchange. The intentionally small surface helps the agent choose correctly and avoids the context cost of resident MCP tool schemas.
 
 <p align="center">
   <img src="assets/demo-search.svg" alt="loci search recalling a past design decision with its symbol, file:line, and git branch" width="640">
 </p>
 
-Touching a symbol means recalling what was decided about it — `loci context` reverse-looks-up the exact code location, signature, and the conversation behind it.
+Running `loci context` for a symbol recalls what shaped it: the command resolves the exact code location and signature, then returns the conversations behind them.
 
 <p align="center">
   <img src="assets/demo-context.svg" alt="loci context reverse-looking-up a symbol to the conversation that shaped it" width="640">
@@ -44,7 +53,7 @@ Touching a symbol means recalling what was decided about it — `loci context` r
 2. **Distill** — The configured distill client (default `claude --print` with `claude-haiku-4-5`; see [Configuration](#configuration) for the other five CLI backends and local-model options) summarizes each exchange into a palace object: `exchange_core` (what was done), `specific_context` (concrete details), `room_assignments` (topic tags). tree-sitter resolves touched files to symbol level (function/class/method + file + line + signature)
 3. **Search** — Cross-layer search fusing BM25 on verbatim text with HNSW on distilled embeddings via RRF
 
-Raw conversations are not embedded — only the condensed distilled text is embedded with `multilingual-e5-small` (384-dim), balancing semantic search quality with embedding cost. The embedding model runs as a **Unix socket server**, keeping search latency **under 0.2 seconds** after the first load.
+Raw conversations are not embedded — only the condensed distilled text is embedded with `multilingual-e5-small` (384-dim), balancing semantic search quality with embedding cost. The embedding model runs as a **Unix socket server**, so subsequent searches avoid model startup.
 
 ## Installation
 
