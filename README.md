@@ -8,15 +8,19 @@
 
 **Give your coding agent code-aware and semantic recall.**
 
-Lociaction is a private, project-local memory bank for coding agents. With the corresponding lifecycle hook installed, it captures work from Claude Code, Codex CLI, Oh My Pi, OpenCode, or Grok, then lets any supported agent find past decisions or pick up an earlier session.
+<p align="center">
+  <img src="assets/demo-recall.svg" alt="loci recall ranking past sessions by keyword relevance across harnesses, each with a distilled digest" width="640">
+</p>
+
+Where most agent-memory tools rely on semantic search over stored text, Lociaction also indexes exact code location: tree-sitter resolves every touched file down to its function, class, or method, so a file, symbol, or line becomes a recall query on its own — not just a keyword. `loci search` layers semantic recall on top for when no code location is known yet. Because indexing happens at the session level, `loci recall` doubles as a built-in cross-harness resume: work captured across Claude Code, Codex CLI, Oh My Pi, OpenCode, and Grok lands in one project memory, browsable as a distilled summary first, with full session detail one `loci show` away.
 
 After the embedding server's first load, warm `loci search` calls stay **under ~0.2 seconds**. Session distillation can also stay on-device with [`qwen2.5-7b-memory-distiller`](https://huggingface.co/sennaLLMLearner/qwen2.5-7b-memory-distiller), a purpose-built SLM fine-tuned specifically for session-memory distillation.
 
 ## Why Lociaction
 
 - **Memory that writes itself** — Once installed, native lifecycle hooks index completed turns and prepare memory at session start. No manual notes to maintain.
-- **Recall from the code you are looking at** — Point `loci context` at a file, symbol, or line. tree-sitter connects that location to the decisions and conversations behind it.
-- **Pick up work across harnesses** — Install a hook for each harness and they index into the same project memory. `loci recall` finds relevant sessions and opens a concise, exchange-by-exchange digest.
+- **Recall from the code you are looking at** — Point `loci context` at a file, symbol, or line for an exact hit; no exact match widens the search (same file → same directory → semantic) with a confidence score instead of failing silently.
+- **Pick up work across harnesses** — `loci hook install --harness <name>` wires each harness into the same project memory, so `loci recall` can resume work regardless of which agent produced it.
 - **Local when privacy matters** — Lociaction's index stays under `.lociaction/`. Select the fine-tuned local distiller to keep exchange text off cloud APIs.
 - **Summaries with receipts** — Start with a distilled memory, then use `loci show` to retrieve the original exchange copied into the project-local index, along with its neighboring context.
 - **Built for agents, not dashboards** — A small CLI surface and stable JSON output provide recall without keeping MCP tool schemas in the context window.
