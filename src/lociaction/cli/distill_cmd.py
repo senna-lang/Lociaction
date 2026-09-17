@@ -235,13 +235,17 @@ def bind_runtime_backend(backend, project_root: Path) -> Iterator:
         return
     from lociaction.adapters.model.llama_server import (
         LlamaServerProcess,
+        llamacpp_concurrency_slot,
         spec_for_model,
     )
     from lociaction.llm import DistillBackend
     from lociaction.paths import lociaction_dir
 
     log_path = lociaction_dir(project_root) / "logs" / "llama-server.log"
-    with LlamaServerProcess(spec_for_model(backend.model), log_path=log_path) as proc:
+    with (
+        llamacpp_concurrency_slot(),
+        LlamaServerProcess(spec_for_model(backend.model), log_path=log_path) as proc,
+    ):
         yield DistillBackend(
             provider="openai",
             model=backend.model,

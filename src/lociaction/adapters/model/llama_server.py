@@ -10,6 +10,7 @@ embedder_server は Unix socket 常駐だが、llama-server は TCP 必須かつ
 
 from __future__ import annotations
 
+import fcntl
 import os
 import platform
 import shutil
@@ -19,6 +20,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +34,8 @@ from lociaction.config import (
     LLAMACPP_GPU_LAYERS_ENV,
     LLAMACPP_HEALTH_TIMEOUT,
     LLAMACPP_HEALTH_TIMEOUT_ENV,
+    LLAMACPP_MAX_CONCURRENT,
+    LLAMACPP_MAX_CONCURRENT_ENV,
     LLAMACPP_SERVER_BINARY_ENV,
     LOCAL_DISTILL_MODEL,
 )
@@ -317,6 +322,70 @@ class LlamaServerProcess:
         if not text:
             return ""
         return f"\n--- llama-server log ---\n{text}"
+
+
+_SLOT_POLL_SECONDS = 0.5
+_SLOT_WAIT_WARN_SECONDS = 10.0
+
+
+def _llamacpp_slots_dir() -> Path:
+    """machine 全体で共有する slot ロックの置き場所。user home 配下なので、
+    project 側 (`.lociaction/`) で使っている「cloned repo が symlink を
+    仕込みうる」という信頼境界は適用されず、素朴な mkdir で十分。"""
+    return Path.home() / ".lociaction" / "locks" / "llamacpp"
+
+
+@contextmanager
+def llamacpp_concurrency_slot(max_concurrent: int | None = None) -> Iterator[None]:
+    """マシン全体で同時に起動できる llama-server インスタンス数を制限する。
+
+    複数プロジェクトが同時に `llamacpp-ft` で蒸留すると、各自が独立した
+    ephemeral llama-server（既定でフル GPU offload）を起動して GPU/unified
+    memory が競合する (LOCI-LLAMACPP-CONCURRENCY-01)。`max_concurrent`
+    （既定: `LOCI_LLAMACPP_MAX_CONCURRENT` env、未設定なら 1 = 常に直列）
+    個の固定 slot ファイルに対する `flock` でカウンティングセマフォを実装する。
+    閾値以内なら即座に並行実行でき、超過分はいずれかの slot が空くまで
+    ポーリングしながら待つ（＝閾値を超えた分だけ直列化される）。
+    """
+    limit = (
+        max_concurrent
+        if max_concurrent is not None
+        else _int_env(LLAMACPP_MAX_CONCURRENT_ENV, LLAMACPP_MAX_CONCURRENT, minimum=1)
+    )
+    slots_dir = _llamacpp_slots_dir()
+    slots_dir.mkdir(parents=True, exist_ok=True)
+    slot_paths = [slots_dir / f"slot-{i}.lock" for i in range(limit)]
+
+    fd: int | None = None
+    waited = 0.0
+    warned = False
+    while fd is None:
+        for slot_path in slot_paths:
+            candidate_fd = os.open(slot_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(candidate_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(candidate_fd)
+                continue
+            fd = candidate_fd
+            break
+        if fd is None:
+            if not warned and waited >= _SLOT_WAIT_WARN_SECONDS:
+                print(
+                    f"llama-server: all {limit} concurrent distill slot(s) busy "
+                    f"machine-wide ({LLAMACPP_MAX_CONCURRENT_ENV}={limit}); "
+                    "waiting for one to free up...",
+                    file=sys.stderr,
+                )
+                warned = True
+            time.sleep(_SLOT_POLL_SECONDS)
+            waited += _SLOT_POLL_SECONDS
+
+    try:
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _ephemeral_port(host: str) -> int:

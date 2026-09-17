@@ -60,6 +60,14 @@ It always appears in `loci distill --setup` / `loci init` as long as it is setup
 
 Apple Silicon defaults to full Metal offload (`-ngl 99`). Override with `LOCI_LLAMACPP_GPU_LAYERS` / `LOCI_LLAMACPP_DRAFT_GPU_LAYERS`. Opt out of the draft with `LOCI_LLAMACPP_DRAFT_MODEL=`. Logs: `.lociaction/logs/llama-server.log`.
 
+Every project's `loci distill` starts its own ephemeral `llama-server`, so two projects distilling at the same moment normally load two full copies of the model (main + draft, both fully offloaded to GPU by default) at once. `llamacpp_concurrency_slot` caps how many `llama-server` instances may run at the same time *machine-wide*, across every project: up to `LOCI_LLAMACPP_MAX_CONCURRENT` (default `1`, i.e. always serialized) run in parallel, and any request past that threshold blocks until a slot frees rather than piling more GPU/unified-memory pressure on top:
+
+```bash
+export LOCI_LLAMACPP_MAX_CONCURRENT=2   # allow up to 2 concurrent llama-server instances
+```
+
+Raise it only as far as your machine's GPU/unified memory comfortably supports running that many `llamacpp-ft` batches at once.
+
 `--no-local-distiller` hides a still-setupable `llamacpp-ft` from the list.
 
 Any OpenAI-compatible local endpoint works as `openai-compat` (both `model` and `base_url` required). No `Authorization` header is sent unless the invoking user's own `LOCIACTION_DISTILL_API_KEY` environment variable is set — project config cannot set or request an API key, so a hostile `.lociaction/config.toml` cannot make lociaction send credentials it doesn't already have:

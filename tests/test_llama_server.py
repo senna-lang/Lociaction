@@ -21,6 +21,7 @@ from lociaction.adapters.model.llama_server import (
     configured_draft_model,
     default_gpu_layers,
     find_llama_server_binary,
+    llamacpp_concurrency_slot,
 )
 
 FAKE = Path(__file__).parent / "fixtures" / "fake_llama_server.py"
@@ -260,4 +261,179 @@ def test_process_missing_binary_raises(tmp_path: Path) -> None:
     (tmp_path / "base.gguf").write_bytes(b"GGUF")
     with pytest.raises(LlamaServerError, match="failed to start"):
         with LlamaServerProcess(spec):
+            raise AssertionError("must not enter")
+
+
+# ---- llamacpp_concurrency_slot ----
+
+
+def _run_workers(
+    monkeypatch, tmp_path: Path, *, worker_count: int, max_concurrent: int, hold: float = 0.15
+) -> tuple[list[tuple[str, str, float]], int]:
+    """worker_count 個の thread を llamacpp_concurrency_slot(max_concurrent) の下で
+    走らせ、(events, 観測された最大同時実行数) を返す。"""
+    import threading
+    import time
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server._SLOT_POLL_SECONDS", 0.01
+    )
+
+    events: list[tuple[str, str, float]] = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+
+    def worker(name: str) -> None:
+        with llamacpp_concurrency_slot(max_concurrent=max_concurrent):
+            with lock:
+                events.append((name, "enter", time.monotonic() - t0))
+            time.sleep(hold)
+            with lock:
+                events.append((name, "exit", time.monotonic() - t0))
+
+    threads = [
+        threading.Thread(target=worker, args=(f"w{i}",)) for i in range(worker_count)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert all(not t.is_alive() for t in threads), "worker thread hung"
+
+    active = 0
+    max_active = 0
+    for _name, kind, _ts in sorted(events, key=lambda e: e[2]):
+        active += 1 if kind == "enter" else -1
+        max_active = max(max_active, active)
+    return events, max_active
+
+
+def test_concurrency_slot_allows_up_to_threshold_in_parallel(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _events, max_active = _run_workers(
+        monkeypatch, tmp_path, worker_count=4, max_concurrent=2
+    )
+    assert max_active == 2
+
+
+def test_concurrency_slot_serializes_past_threshold(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """max_concurrent=1 では常に直列（各 worker の enter/exit が重ならない）。
+
+    slot 獲得はポーリング競争であり FIFO を保証しないので、特定の
+    w0->w1->w2 実行順序ではなく「同時実行数が常に1」という不変条件だけを
+    検証する。"""
+    events, max_active = _run_workers(
+        monkeypatch, tmp_path, worker_count=3, max_concurrent=1
+    )
+    assert max_active == 1
+    ordered = sorted(events, key=lambda e: e[2])
+    names_seen = {name for name, _kind, _ts in ordered}
+    assert names_seen == {"w0", "w1", "w2"}
+    # 各 name は enter 直後に exit しており、他の name の enter を挟まない。
+    for i in range(0, len(ordered), 2):
+        enter_name, enter_kind, _ = ordered[i]
+        exit_name, exit_kind, _ = ordered[i + 1]
+        assert enter_kind == "enter" and exit_kind == "exit"
+        assert enter_name == exit_name
+
+
+def test_concurrency_slot_default_is_serial_when_env_unset(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("LOCI_LLAMACPP_MAX_CONCURRENT", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server._SLOT_POLL_SECONDS", 0.01
+    )
+    import threading
+    import time
+
+    events: list[tuple[str, float]] = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+
+    def worker(name: str) -> None:
+        with llamacpp_concurrency_slot():  # no override -> reads env/default (1)
+            with lock:
+                events.append((f"{name}-enter", time.monotonic() - t0))
+            time.sleep(0.1)
+            with lock:
+                events.append((f"{name}-exit", time.monotonic() - t0))
+
+    threads = [threading.Thread(target=worker, args=(f"w{i}",)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    labels = [label for label, _ts in sorted(events, key=lambda e: e[1])]
+    assert labels == ["w0-enter", "w0-exit", "w1-enter", "w1-exit"] or labels == [
+        "w1-enter",
+        "w1-exit",
+        "w0-enter",
+        "w0-exit",
+    ]
+
+
+def test_concurrency_slot_env_override_allows_more_parallelism(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCI_LLAMACPP_MAX_CONCURRENT", "3")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "lociaction.adapters.model.llama_server._SLOT_POLL_SECONDS", 0.01
+    )
+    import threading
+    import time
+
+    events: list[tuple[str, str, float]] = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+
+    def worker(name: str) -> None:
+        with llamacpp_concurrency_slot():  # reads LOCI_LLAMACPP_MAX_CONCURRENT=3
+            with lock:
+                events.append((name, "enter", time.monotonic() - t0))
+            time.sleep(0.15)
+            with lock:
+                events.append((name, "exit", time.monotonic() - t0))
+
+    threads = [threading.Thread(target=worker, args=(f"w{i}",)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    active = 0
+    max_active = 0
+    for _name, kind, _ts in sorted(events, key=lambda e: e[2]):
+        active += 1 if kind == "enter" else -1
+        max_active = max(max_active, active)
+    assert max_active == 3
+
+
+def test_concurrency_slot_releases_lock_after_exception(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with llamacpp_concurrency_slot(max_concurrent=1):
+            raise RuntimeError("boom")
+
+    # A subsequent acquire must not hang — the slot from the failed body
+    # must have been released.
+    with llamacpp_concurrency_slot(max_concurrent=1):
+        pass
+
+
+def test_concurrency_slot_rejects_env_below_minimum(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCI_LLAMACPP_MAX_CONCURRENT", "0")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with pytest.raises(LlamaServerError, match="LOCI_LLAMACPP_MAX_CONCURRENT"):
+        with llamacpp_concurrency_slot():
             raise AssertionError("must not enter")

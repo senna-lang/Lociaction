@@ -65,6 +65,14 @@ LLAMACPP_DRAFT_GPU_LAYERS_ENV = "LOCI_LLAMACPP_DRAFT_GPU_LAYERS"
 LLAMACPP_HEALTH_TIMEOUT_ENV = "LOCI_LLAMACPP_HEALTH_TIMEOUT"
 LLAMACPP_HEALTH_TIMEOUT = 120.0
 
+# 複数プロジェクトが同時に llamacpp-ft で蒸留すると、各自が独立した ephemeral
+# llama-server（フル GPU offload）を起動するため GPU/unified memory が競合する
+# (LOCI-LLAMACPP-CONCURRENCY-01)。マシン全体で同時に起動できる llama-server
+# インスタンス数をこの閾値に制限し、超過分はいずれかの slot が空くまで直列に
+# 待たせる（`adapters/model/llama_server.llamacpp_concurrency_slot`）。
+LLAMACPP_MAX_CONCURRENT_ENV = "LOCI_LLAMACPP_MAX_CONCURRENT"
+LLAMACPP_MAX_CONCURRENT = 1
+
 # project-local config.toml だけでは蒸留内容の送信先をリモートへ変更できない。
 # リモート OpenAI 互換 endpoint は、呼び出すユーザーが environment で origin を許可する。
 REMOTE_DISTILL_ORIGINS_ENV = "LOCIACTION_REMOTE_DISTILL_ORIGINS"
