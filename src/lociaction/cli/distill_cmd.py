@@ -5,13 +5,17 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
-from lociaction.adapters.model.types import ModelClient
+from lociaction.adapters.model.types import ClientStatus, ModelClient
 from lociaction.utils import sanitize_terminal_text
+
+if TYPE_CHECKING:
+    from lociaction.adapters.harness.model_catalog import HarnessModelCatalog
 
 
 def _is_interactive() -> bool:
@@ -19,28 +23,67 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _print_client_list(statuses, recommended: str | None) -> None:
-    for i, s in enumerate(statuses, start=1):
-        marks: list[str] = []
-        if s.id == recommended:
-            marks.append("recommended")
-        if s.state == "setupable":
-            marks.append("needs setup")
-        suffix = f" ({', '.join(marks)})" if marks else ""
-        typer.echo(f"  {i}. {s.label} [{s.id}]{suffix}")
+def _prompt_index(prompt: str, count: int, *, default: int) -> int:
+    """Return a validated one-based menu index without treating typos as selection."""
+    while True:
+        raw = typer.prompt(prompt, default=str(default)).strip()
+        if raw.isdigit() and 1 <= int(raw) <= count:
+            return int(raw)
+        typer.echo(f"  Invalid choice. Please enter one of: 1-{count}.")
+
+
+def _select_recorded_model(catalog: HarnessModelCatalog) -> str | None:
+    """Prompt for a selected harness's project-local model history."""
+    choices: list[tuple[str, str | None]] = [
+        ("Harness default", None),
+        *((model, model) for model in catalog.models),
+    ]
+    typer.echo(f"Models used by {catalog.label} in this project:")
+    for i, (label, _model) in enumerate(choices, start=1):
+        typer.echo(f"  {i}. {label}")
+    return choices[_prompt_index("Select model", len(choices), default=1) - 1][1]
+
+
+def _warn_if_remote_grant_missing(client_id: str) -> None:
+    """Interactive selection here is explicit consent, so this run still uses
+    ``client_id``. But every non-interactive invocation (hook-triggered
+    `loci distill`, `loci status --check`) re-reads config.toml from disk and
+    applies the same LOCIACTION_REMOTE_DISTILL_CLIENTS grant check — without it,
+    those runs silently treat distillation as unconfigured (config.py)."""
+    from lociaction.config import (
+        REMOTE_DISTILL_CLIENTS_ENV,
+        remote_client_grant_missing,
+    )
+
+    if remote_client_grant_missing(client_id):
+        typer.echo(
+            f"Note: '{client_id}' sends exchange text to an external CLI provider.\n"
+            "This run will still use it, but background hooks (Claude Code Stop/"
+            "SessionStart, etc.) re-read the saved config and treat it as "
+            "unconfigured until you grant it in the environment those hooks run in:\n"
+            f"  export {REMOTE_DISTILL_CLIENTS_ENV}={client_id}\n"
+            "Add that to the shell profile / login environment the hook process "
+            "inherits — not just this terminal session.",
+            err=True,
+        )
 
 
 def prompt_client_selection(
     root, *, include_setupable: bool = True
 ) -> ModelClient | None:
-    """discover → Ready+setupable 一覧 → 選択。setupable を選んだら setup() する。
+    """Select the local FT model or a project harness then one of its recorded models.
 
-    config は書き換えず ModelClient を返すだけ（save は `loci distill --setup`）。
+    A harness appears only when it has sessions for ``root`` and its matching
+    distillation CLI is ready. Model IDs come from those local session logs;
+    the default option leaves the harness's own default model unchanged.
     """
+    from lociaction.adapters.harness.model_catalog import (
+        HarnessModelCatalog,
+        discover_project_harness_models,
+    )
     from lociaction.adapters.model.registry import (
         check_ready,
         discover,
-        recommended_id,
         resolve_client,
         selectable_clients,
         setup,
@@ -48,28 +91,65 @@ def prompt_client_selection(
     from lociaction.config import load_config
 
     statuses = discover()
-    choices = selectable_clients(statuses, include_setupable=include_setupable)
+    selectable = selectable_clients(statuses, include_setupable=include_setupable)
+    local_choices = [status for status in selectable if status.id == "llamacpp-ft"]
+    ready_by_client = {
+        status.id: status
+        for status in statuses
+        if status.state == "ready" and status.client is not None
+    }
+    harness_choices = [
+        catalog
+        for catalog in discover_project_harness_models(root)
+        if catalog.client_id in ready_by_client
+    ]
+    choices: list[tuple[str, object]] = [
+        *((("local", status)) for status in local_choices)
+    ]
+    choices.extend(("harness", catalog) for catalog in harness_choices)
     if not choices:
-        typer.echo("No distill client is ready. Run `loci distill --setup` later.")
+        typer.echo(
+            "No local FT model or ready harness session was found for this project."
+        )
         return None
 
-    rec = recommended_id(statuses)
-    typer.echo("Available distill clients:")
-    _print_client_list(choices, rec)
-    default_idx = next((i for i, s in enumerate(choices, 1) if s.id == rec), 1)
-    raw = typer.prompt("Select client", default=str(default_idx)).strip()
-    idx = int(raw) if raw.isdigit() and 1 <= int(raw) <= len(choices) else default_idx
-    chosen = choices[idx - 1]
-    if chosen.state == "setupable":
-        ok, msg = setup(chosen.id)
-        typer.echo(msg)
-        if not ok:
-            return None
-        chosen = check_ready(chosen.id)
-        if chosen.state != "ready":
-            typer.echo(f"Setup did not make {chosen.id} ready: {chosen.reason}")
-            return None
-    return chosen.client or resolve_client(chosen.id, load_config(root))
+    typer.echo("Available distillation sources:")
+    for i, (kind, choice) in enumerate(choices, start=1):
+        if kind == "local":
+            status = cast(ClientStatus, choice)
+            marks = " (needs setup)" if status.state == "setupable" else ""
+            typer.echo(f"  {i}. {status.label} [{status.id}]{marks}")
+        else:
+            catalog = cast(HarnessModelCatalog, choice)
+            typer.echo(f"  {i}. {catalog.label} [{catalog.harness_id}]")
+
+    local_default = next(
+        (i for i, (kind, _choice) in enumerate(choices, start=1) if kind == "local"),
+        1,
+    )
+    kind, choice = choices[
+        _prompt_index("Select source", len(choices), default=local_default) - 1
+    ]
+    if kind == "harness":
+        catalog = cast(HarnessModelCatalog, choice)
+        status = ready_by_client[catalog.client_id]
+        client = status.client or resolve_client(status.id, load_config(root))
+        client = replace(client, model=_select_recorded_model(catalog))
+    else:
+        status = cast(ClientStatus, choice)
+        if status.state == "setupable":
+            ok, msg = setup(status.id)
+            typer.echo(msg)
+            if not ok:
+                return None
+            status = check_ready(status.id)
+            if status.state != "ready":
+                typer.echo(f"Setup did not make {status.id} ready: {status.reason}")
+                return None
+        client = status.client or resolve_client(status.id, load_config(root))
+
+    _warn_if_remote_grant_missing(client.id)
+    return client
 
 
 def _setup_and_save(root) -> None:
@@ -143,7 +223,6 @@ def _resolve_backend(cfg, root, is_tty: bool):
     return _from_client(client) if client else None
 
 
-
 @contextmanager
 def bind_runtime_backend(backend, project_root: Path) -> Iterator:
     """llamacpp-ft なら ephemeral llama-server を起動して base_url を差し替える。
@@ -162,15 +241,14 @@ def bind_runtime_backend(backend, project_root: Path) -> Iterator:
     from lociaction.paths import lociaction_dir
 
     log_path = lociaction_dir(project_root) / "logs" / "llama-server.log"
-    with LlamaServerProcess(
-        spec_for_model(backend.model), log_path=log_path
-    ) as proc:
+    with LlamaServerProcess(spec_for_model(backend.model), log_path=log_path) as proc:
         yield DistillBackend(
             provider="openai",
             model=backend.model,
             base_url=proc.base_url,
             client_id="llamacpp-ft",
         )
+
 
 def distill(
     limit: Annotated[
@@ -226,9 +304,7 @@ def distill(
         )
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            typer.echo(
-                f"Refusing symlinked lock file: {lock_path}", err=True
-            )
+            typer.echo(f"Refusing symlinked lock file: {lock_path}", err=True)
             raise typer.Exit(1) from None
         raise
     try:
@@ -244,13 +320,12 @@ def distill(
         os.close(fd)
         raise typer.Exit(0 if not is_tty else 1)
 
+    from lociaction.cli.progress import DistillationProgress
+
+    progress = DistillationProgress()
+
     def _on_progress(cur: int, tot: int, error: str | None = None) -> None:
-        if error:
-            typer.echo(
-                f"  [{cur}/{tot}] error: {sanitize_terminal_text(error)}", err=True
-            )
-        else:
-            typer.echo(f"  [{cur}/{tot}] distilled", err=True)
+        progress.update(cur, tot, error)
 
     try:
         from lociaction.db import check_drift
@@ -290,9 +365,11 @@ def distill(
         except LlamaServerError as exc:
             typer.echo(sanitize_terminal_text(str(exc)), err=True)
             raise typer.Exit(1) from None
+        progress.finish()
         typer.echo(f"Distilled {count} exchange(s).")
         if err_count > 0:
             typer.echo(f"{err_count} exchange(s) failed — see errors above.", err=True)
     finally:
+        progress.finish()
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)

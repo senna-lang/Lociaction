@@ -188,6 +188,14 @@ client = "codex-cli"     # or "gemini-cli", "grok-cli", "opencode-cli", "omp-cli
 
 `codex exec --output-schema` and `grok -p --json-schema` constrain the response to the palace-object schema directly (`structuredOutput` unwraps in one step for grok, no wrapper at all for codex). `gemini --prompt --output-format json`, `opencode run --format json`, and `omp -p --mode json` have no schema-constrained mode, so the palace object is parsed out of their free-text/event-stream output the same way `claude --print`'s `result` field is unwrapped. `loci distill --setup` detects all five automatically (PATH presence only, like `claude-cli`) and lists them alongside the other ready clients.
 
+Beyond `loci init` writing `client = "..."` to config.toml, a background hook (Claude Code's Stop/SessionStart, or any non-interactive `loci distill`) also requires the invoking user's own environment to grant it explicitly — a cloned repo's `.lociaction/config.toml` cannot silently opt you into sending session text to one of these CLIs:
+
+```bash
+export LOCIACTION_REMOTE_DISTILL_CLIENTS=omp-cli   # comma-separated for more than one
+```
+
+Set this in the shell profile the hook process actually inherits, not just an interactive terminal (GUI-launched agents on macOS often skip `~/.zshrc`/`~/.bashrc`). Interactively selecting a client during `loci init`/`loci distill --setup` still runs that same session's distillation regardless — the prompt itself is the consent; the grant only gates later, non-interactive runs. See `loci docs show distillation`.
+
 ## Acknowledgments
 
 The palace object model, room-based topic grouping, and BM25+HNSW fusion search are based on:

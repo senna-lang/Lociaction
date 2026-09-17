@@ -1,4 +1,5 @@
 """loci init コマンドのテスト — 初期状態作成・.gitignore・既存 exchange の蒸留スキップ。"""
+
 from __future__ import annotations
 
 import json
@@ -43,6 +44,7 @@ def _no_distill_clients_by_default(monkeypatch):
         ]
 
     monkeypatch.setattr("lociaction.adapters.model.registry.discover", _fake_discover)
+
 
 def _create_jsonl(
     path: Path,
@@ -244,8 +246,8 @@ def test_init_prints_banner(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
-    # pagga figlet バナー特有の文字列
-    assert "░█▀▀░█▀█░█▀▄" in result.output
+    assert "█████  ███   ████ █████" in result.output
+    assert r"|_____\___/ \____|___/_/   \_\____|" not in result.output
     assert "memory palace for AI coding agents" in result.output
 
 
@@ -268,7 +270,9 @@ def test_init_agents_md_message_prints_before_indexing_output(tmp_path, monkeypa
     inject_agents_md 自体は rmtree でガードされた try の外に置かれているが、
     メッセージの表示順は元の実装と変えない。
     """
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → distill [3]=全件 → distill now [1]=no
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n3\n1\n")
@@ -338,10 +342,14 @@ def test_init_non_git_does_not_traverse_parent(tmp_path, monkeypatch):
 
 
 def test_init_skip_existing_marks_all_as_skipped(tmp_path, monkeypatch):
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=2, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=2, exchanges_per_file=3
+    )
 
     # min_chars プロンプト [1]=50 (default)
-    result = runner.invoke(app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n"
+    )
     assert result.exit_code == 0
 
     db = tmp_path / ".lociaction" / "memory.db"
@@ -363,10 +371,14 @@ def test_init_skip_existing_marks_all_as_skipped(tmp_path, monkeypatch):
 
 
 def test_init_distill_limit_keeps_recent(tmp_path, monkeypatch):
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=2, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=2, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → priority [1]=recent → distill now [1]=no
-    result = runner.invoke(app, ["init", "--no-local-distiller", "--distill-limit", "2"], input="1\n1\n1\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--distill-limit", "2"], input="1\n1\n1\n"
+    )
     assert result.exit_code == 0
 
     db = tmp_path / ".lociaction" / "memory.db"
@@ -390,7 +402,9 @@ def test_init_distill_limit_keeps_recent(tmp_path, monkeypatch):
 
 def test_init_prompt_distill_all(tmp_path, monkeypatch):
     """対話プロンプトで [3] を選ぶと全件蒸留対象"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → distill [3]=全件 → distill now [1]=no
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n3\n1\n")
@@ -412,7 +426,9 @@ def test_init_prompt_distill_all(tmp_path, monkeypatch):
 
 def test_init_prompt_skip_all(tmp_path, monkeypatch):
     """対話プロンプトで [1] を選ぶと全件スキップ"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars プロンプト [1]=50 (default) → 蒸留プロンプト [1]=全件スキップ
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n1\n")
@@ -442,7 +458,9 @@ def test_init_min_chars_flag(tmp_path, monkeypatch):
         tmp_path, monkeypatch, num_files=1, char_sizes=[60, 60, 250]
     )
 
-    result = runner.invoke(app, ["init", "--no-local-distiller", "--min-chars", "200", "--skip-existing"])
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--min-chars", "200", "--skip-existing"]
+    )
     assert result.exit_code == 0
 
     db = tmp_path / ".lociaction" / "memory.db"
@@ -481,7 +499,9 @@ def test_init_min_chars_flag_skips_prompt(tmp_path, monkeypatch):
     )
 
     # --skip-existing で蒸留プロンプトもスキップ → 対話入力なしで完了
-    result = runner.invoke(app, ["init", "--no-local-distiller", "--min-chars", "50", "--skip-existing"])
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--min-chars", "50", "--skip-existing"]
+    )
     assert result.exit_code == 0
     assert "Min chars threshold" not in result.output
 
@@ -497,7 +517,9 @@ def test_init_distill_priority_longest(tmp_path, monkeypatch):
     )
 
     # min_chars [1]=50 → distill [4]=custom → 1件 → priority [2]=longest → distill now [1]=no
-    result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n1\n2\n1\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller"], input="1\n4\n1\n2\n1\n"
+    )
     assert result.exit_code == 0
 
     db = tmp_path / ".lociaction" / "memory.db"
@@ -521,7 +543,9 @@ def test_init_distill_priority_recent(tmp_path, monkeypatch):
     )
 
     # min_chars [1]=50 → distill [4]=custom → 1件 → priority [1]=recent → distill now [1]=no
-    result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n1\n1\n1\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller"], input="1\n4\n1\n1\n1\n"
+    )
     assert result.exit_code == 0
 
     db = tmp_path / ".lociaction" / "memory.db"
@@ -545,7 +569,9 @@ def test_init_distill_priority_recent(tmp_path, monkeypatch):
 
 def test_init_prompt_invalid_choice_reprompts(tmp_path, monkeypatch):
     """_resolve_skip_count で無効入力 → 再プロンプト → 有効値で続行"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → skip_count "99"(無効) → 再入力 [1]=Skip all
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n99\n1\n")
@@ -568,7 +594,9 @@ def test_init_prompt_invalid_choice_reprompts(tmp_path, monkeypatch):
 
 def test_init_distill_now_accepts_n_alias(tmp_path, monkeypatch):
     """_ask_run_distill_now が 'n' を No として受け付ける"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → skip [3]=全件蒸留 → distill now "n"=No
     result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n3\nn\n")
@@ -580,10 +608,14 @@ def test_init_distill_now_accepts_n_alias(tmp_path, monkeypatch):
 
 def test_init_custom_count_out_of_range_reprompts(tmp_path, monkeypatch):
     """Custom 件数プロンプトで範囲外 → 再入力 → 有効値で続行"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # min_chars [1]=50 → skip [4]=custom → "0"(範囲外) → "2"(有効) → priority [1]=recent → distill now "n"
-    result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n0\n2\n1\nn\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller"], input="1\n4\n0\n2\n1\nn\n"
+    )
     assert result.exit_code == 0
     assert "Must be ≥ 1" in result.output
 
@@ -599,10 +631,14 @@ def test_init_custom_count_out_of_range_reprompts(tmp_path, monkeypatch):
 
 def test_init_custom_count_over_total_reprompts(tmp_path, monkeypatch):
     """Custom 件数プロンプトで total 超え → 再入力"""
-    _setup_project_with_sessions(tmp_path, monkeypatch, num_files=1, exchanges_per_file=3)
+    _setup_project_with_sessions(
+        tmp_path, monkeypatch, num_files=1, exchanges_per_file=3
+    )
 
     # total=3 なのに 99 を指定 → 再入力 → 3 で全件蒸留扱い
-    result = runner.invoke(app, ["init", "--no-local-distiller"], input="1\n4\n99\n3\nn\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller"], input="1\n4\n99\n3\nn\n"
+    )
     assert result.exit_code == 0
     assert "Must be ≤ 3" in result.output
 
@@ -639,7 +675,7 @@ def test_init_preserves_preexisting_dir_on_failure(tmp_path, monkeypatch):
     lociaction_dir = tmp_path / ".lociaction"
     lociaction_dir.mkdir()
     custom_config = lociaction_dir / "config.toml"
-    custom_config.write_text("[distill]\nmodel = \"claude-opus-4-7\"\n")
+    custom_config.write_text('[distill]\nmodel = "claude-opus-4-7"\n')
 
     def _boom(db_path):
         raise RuntimeError("simulated failure")
@@ -651,7 +687,7 @@ def test_init_preserves_preexisting_dir_on_failure(tmp_path, monkeypatch):
     # pre-existing .lociaction/ とその中の config.toml は削除されていない
     assert lociaction_dir.exists()
     assert custom_config.exists()
-    assert custom_config.read_text() == "[distill]\nmodel = \"claude-opus-4-7\"\n"
+    assert custom_config.read_text() == '[distill]\nmodel = "claude-opus-4-7"\n'
 
 
 def test_init_agents_md_failure_does_not_delete_completed_lociaction(
@@ -693,7 +729,6 @@ def test_init_agents_md_interrupt_does_not_delete_completed_lociaction(
     assert result.exit_code == 130
     assert "Interrupted" in result.output
     assert (tmp_path / ".lociaction" / "memory.db").exists()
-
 
 
 def test_init_malformed_agents_md_marker_does_not_delete_fresh_lociaction(
@@ -753,7 +788,9 @@ def test_init_per_file_index_error_continues(tmp_path, monkeypatch):
     monkeypatch.setattr("lociaction.indexer.index_file", _flaky)
 
     # --skip-existing でも min_chars プロンプトは出る → "1"=50
-    result = runner.invoke(app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n")
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n"
+    )
     assert result.exit_code == 0
     assert "flaky fs error" in result.output
     # 2ファイル目は成功し DB は残っている
@@ -963,10 +1000,10 @@ def test_init_no_ready_client_leaves_distill_unconfigured(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["init"])
     assert result.exit_code == 0
-    assert "No distill client is ready" in result.output
+    assert "No local FT model or ready harness session" in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
-    assert 'loci distill --setup' in config
+    assert "loci distill --setup" in config
     assert '\nclient = "' not in config
 
 
@@ -1096,23 +1133,37 @@ def test_init_ready_clients_default_selection_is_llamacpp_ft(tmp_path, monkeypat
 
     result = runner.invoke(app, ["init"], input="\n")
     assert result.exit_code == 0
-    assert "(recommended)" in result.output
+    assert "Available distillation sources:" in result.output
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "llamacpp-ft"' in config
 
 
-def test_init_select_claude_cli_from_ready_list(tmp_path, monkeypatch):
-    """一覧から番号で claude-cli を選べる"""
+def test_init_selects_recorded_claude_model_from_project_harness(tmp_path, monkeypatch):
+    """Claude history exposes its recorded model after its harness is selected."""
+    from lociaction.adapters.harness.model_catalog import HarnessModelCatalog
+
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     _patch_both_ready(monkeypatch)
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.model_catalog.discover_project_harness_models",
+        lambda root: (
+            HarnessModelCatalog(
+                harness_id="claude",
+                label="Claude Code",
+                client_id="claude-cli",
+                models=("claude-haiku-4-5-20251001",),
+            ),
+        ),
+    )
 
-    result = runner.invoke(app, ["init"], input="2\n")
+    result = runner.invoke(app, ["init"], input="2\n2\n")
     assert result.exit_code == 0
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()
     assert 'client = "claude-cli"' in config
+    assert 'model = "claude-haiku-4-5-20251001"' in config
 
 
 def test_init_no_local_distiller_flag_hides_setupable_llamacpp(tmp_path, monkeypatch):
@@ -1170,7 +1221,6 @@ def test_init_distill_client_flag_ready_writes_config_without_prompt(
     assert 'client = "claude-cli"' in config
 
 
-
 def test_init_rejects_dangling_symlinked_config_toml_no_client(tmp_path, monkeypatch):
     """config.toml がダングリング symlink の場合、Path.exists() の False 判定に
     釣られて symlink 先へ書き込まない (LOCI-INIT-CONFIGTOML-SYMLINK-TOCTOU)。"""
@@ -1222,6 +1272,7 @@ def test_init_rejects_symlinked_config_toml_with_chosen_client(tmp_path, monkeyp
 
     assert result.exit_code == 1
     assert outside.read_text() == "sentinel\n"
+
 
 def test_init_distill_client_flag_not_ready_errors_without_fallback(
     tmp_path, monkeypatch

@@ -281,12 +281,14 @@ def resolve_omp_pi_sessions_path(project_root: Path) -> Path | None:
     omp-pi はホーム相対パスを "-" でつないだ slug を使う。slug は衝突し得るため、
     候補内の JSONL は `session_files_for_project()` で active root に絞り込む。
     """
-    sessions_dir = Path.home() / ".omp" / "agent" / "sessions"
+    home = Path.home().resolve()
+    sessions_dir = home / ".omp" / "agent" / "sessions"
     if not sessions_dir.exists():
         return None
     try:
-        relative = project_root.relative_to(Path.home())
-    except ValueError:
+        project_root = project_root.resolve()
+        relative = project_root.relative_to(home)
+    except (OSError, RuntimeError, ValueError):
         return None
     candidate = sessions_dir / ("-" + "-".join(relative.parts))
     if candidate.is_dir() and _has_project_session(candidate, project_root):

@@ -34,7 +34,7 @@ loci distill --setup
 loci status --check
 ```
 
-`--setup` rediscovers clients, offers local-model setup when appropriate, and saves the choice. `loci distill` without `--setup` uses the configured client.
+`--setup` and `init` first offer the local FT model, then only harnesses with sessions in the current project and a ready matching CLI. Selecting a harness presents the model IDs recorded in that project's local session logs plus a default-model option; it never queries a provider or claims the account can still access a historical model. The selected client and model are saved. `loci distill` without `--setup` uses that configured selection.
 
 If the configured client is not ready, lociaction does **not** silently switch. In a non-interactive run it prints the reason and skips. Reconfigure with `loci distill --setup`, or run `loci distill` in an interactive terminal.
 
@@ -90,6 +90,14 @@ Set this only for origins you trust. A project config cannot widen that allowlis
 ## Paid CLI backends
 
 If Claude / Codex / Gemini / Grok / OpenCode / Oh My Pi is installed and authenticated, select that id. Only clients actually on `PATH` appear as ready.
+
+Selecting one of these (`claude-cli`, `codex-cli`, `gemini-cli`, `grok-cli`, `opencode-cli`, `omp-cli`) in an interactive `loci init` / `loci distill --setup` run uses it immediately for that run — the person choosing it in their own terminal is the explicit consent. Every *non-interactive* invocation afterward (a Stop/SessionStart hook, `loci distill --limit N` from cron, `loci status --check`) re-reads `.lociaction/config.toml` from disk and, for the same reason as remote OpenAI-compatible endpoints above, refuses to run that CLI client unless the invoking user's own environment names it explicitly:
+
+```bash
+export LOCIACTION_REMOTE_DISTILL_CLIENTS=omp-cli   # comma-separated for more than one
+```
+
+Without that grant, hook-triggered distillation silently treats the client as unconfigured (`loci status` and the hook's stderr both say so). Set it in the shell profile the hook process actually inherits — not just an interactive terminal — since GUI-launched agent processes on macOS often do not source `~/.zshrc`/`~/.bashrc`.
 
 ## Running distillation
 

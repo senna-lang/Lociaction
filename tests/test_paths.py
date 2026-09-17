@@ -267,6 +267,27 @@ def test_resolve_omp_sessions_path_rejects_colliding_foreign_session_dir(
     assert resolve_omp_pi_sessions_path(project_root) is None
 
 
+def test_resolve_omp_sessions_path_resolves_a_symlinked_home_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The /var-to-/private macOS home alias must not hide a project session."""
+    from lociaction.paths import resolve_omp_pi_sessions_path
+
+    real_home = tmp_path / "private-home"
+    home_alias = tmp_path / "var-home"
+    project_root = real_home / "project"
+    project_root.mkdir(parents=True)
+    home_alias.symlink_to(real_home, target_is_directory=True)
+    session_dir = real_home / ".omp" / "agent" / "sessions" / "-project"
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.jsonl").write_text(
+        json.dumps({"type": "message", "cwd": str(project_root)}) + "\n"
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home_alias))
+
+    assert resolve_omp_pi_sessions_path(project_root.resolve()) == session_dir
+
+
 def test_session_file_matches_project_root_bounds_oversized_line_reads(
     tmp_path: Path,
 ) -> None:

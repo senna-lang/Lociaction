@@ -41,11 +41,13 @@ app = typer.Typer(
 
 DEFAULT_DISTILL_RECENT = 50
 
-_BANNER = r"""░█▀▀░█▀█░█▀▄░█▀▀░█▀█░▀█▀░█▀▄░▀█▀░█░█░█▄█
-░█░░░█░█░█░█░█▀▀░█▀█░░█░░█▀▄░░█░░█░█░█░█
-░▀▀▀░▀▀▀░▀▀░░▀▀▀░▀░▀░░▀░░▀░▀░▀▀▀░▀▀▀░▀░▀"""
+_BANNER = """██     ███   ████ █████  ███   ████ █████ █████  ███  ██  ██
+██    ██ ██ ██      ██  ██ ██ ██      ██    ██  ██ ██ ███ ██
+██    ██ ██ ██      ██  █████ ██      ██    ██  ██ ██ ██████
+██    ██ ██ ██      ██  ██ ██ ██      ██    ██  ██ ██ ██ ███
+█████  ███   ████ █████ ██ ██  ████   ██  █████  ███  ██  ██"""
 
-_GRADIENT_BLUE = ["#7bb8ff", "#4a9eff", "#1b45a8"]
+_GRADIENT_BLUE = ["#7bb8ff", "#6aafff", "#4a9eff", "#2f70d0", "#1b45a8"]
 
 
 def _print_banner() -> None:
@@ -91,9 +93,7 @@ def _ensure_lociaction_ignored(root: Path) -> None:
 
     gitignore_path = root / ".gitignore"
     try:
-        fd = os.open(
-            str(gitignore_path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644
-        )
+        fd = os.open(str(gitignore_path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise ValueError(
@@ -285,7 +285,9 @@ def init(
         # open_dir_relative は親 `.lociaction/` 自体の symlink すり替えにも
         # 都度対応する (LOCI-REGISTRY-CONFIGDIR-TOCTOU-01)。
         try:
-            probe_fd = open_dir_relative(config_path.parent, config_path.name, os.O_RDONLY)
+            probe_fd = open_dir_relative(
+                config_path.parent, config_path.name, os.O_RDONLY
+            )
         except FileNotFoundError:
             config_exists = False
         except OSError as exc:
@@ -489,9 +491,11 @@ def init(
 
     # --- 蒸留フェーズ（失敗しても DB は残す: 後で loci distill で再試行可） ---
     if run_distill_now:
+        from lociaction.cli.progress import DistillationProgress
         from lociaction.embedder import EmbedderSetupError
         from lociaction.llm import DistillUnconfiguredError
 
+        progress = DistillationProgress()
         try:
             from lociaction.config import load_config
             from lociaction.distiller import distill_all
@@ -501,13 +505,7 @@ def init(
             typer.echo("Running distillation...")
 
             def _on_progress(cur: int, tot: int, error: str | None = None) -> None:
-                if error:
-                    typer.echo(
-                        f"  [{cur}/{tot}] error: {sanitize_terminal_text(error)}",
-                        err=True,
-                    )
-                else:
-                    typer.echo(f"  [{cur}/{tot}] distilled", err=True)
+                progress.update(cur, tot, error)
 
             backend = (
                 DistillBackend(
@@ -544,6 +542,7 @@ def init(
                     project_root=str(root),
                     distill_min_chars=cfg.distill_min_chars,
                 )
+            progress.finish()
             typer.echo(f"Distilled {count} exchange(s).")
             if err_count > 0:
                 typer.echo(
@@ -580,6 +579,8 @@ def init(
                 err=True,
             )
             raise typer.Exit(code=1) from None
+        finally:
+            progress.finish()
 
 
 _MIN_CHARS_CANDIDATES = [50, 100, 200, 500]
@@ -678,7 +679,10 @@ def _resolve_init_distill_client(
         check_ready,
         setup,
     )
-    from lociaction.cli.distill_cmd import prompt_client_selection
+    from lociaction.cli.distill_cmd import (
+        _warn_if_remote_grant_missing,
+        prompt_client_selection,
+    )
 
     if distill_client_flag is not None:
         if distill_client_flag not in DISCOVERABLE_CLIENT_IDS:
@@ -701,11 +705,10 @@ def _resolve_init_distill_client(
                 err=True,
             )
             raise typer.Exit(code=1)
+        _warn_if_remote_grant_missing(status.client.id)
         return status.client
 
-    return prompt_client_selection(
-        root, include_setupable=not no_local_distiller
-    )
+    return prompt_client_selection(root, include_setupable=not no_local_distiller)
 
 
 def _ask_distill_priority() -> str:

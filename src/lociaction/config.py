@@ -259,7 +259,7 @@ def load_config(project_root: Path) -> Config:
     distill_client: str | None
     distill_unconfigured: bool
     if isinstance(raw_client, str) and raw_client in VALID_DISTILL_CLIENT_IDS:
-        if _requires_remote_client_grant(raw_client) and raw_client not in _allowed_remote_clients():
+        if remote_client_grant_missing(raw_client):
             print(
                 f"Warning: distill.client '{raw_client}' requires an explicit "
                 f"{REMOTE_DISTILL_CLIENTS_ENV} grant, treating distill as unconfigured.",
@@ -294,7 +294,7 @@ def load_config(project_root: Path) -> Config:
             candidate_client = "claude-cli"
         else:
             candidate_client = "openai-compat"
-        if _requires_remote_client_grant(candidate_client) and candidate_client not in _allowed_remote_clients():
+        if remote_client_grant_missing(candidate_client):
             print(
                 f"Warning: distill.provider resolves to remote client '{candidate_client}', "
                 f"which requires an explicit {REMOTE_DISTILL_CLIENTS_ENV} grant. "
@@ -370,6 +370,15 @@ def _allowed_remote_clients() -> frozenset[str]:
 def _requires_remote_client_grant(client_id: str) -> bool:
     """repository config からの選択に user-environment grant が必要な client を判定する。"""
     return client_id in REMOTE_CLI_DISTILL_CLIENT_IDS
+
+
+def remote_client_grant_missing(client_id: str) -> bool:
+    """CLI 層（対話選択直後の警告など）が再利用する公開ヘルパー。
+
+    client_id が remote CLI client で、かつユーザー環境が
+    `LOCIACTION_REMOTE_DISTILL_CLIENTS` で明示許可していなければ True。
+    """
+    return _requires_remote_client_grant(client_id) and client_id not in _allowed_remote_clients()
 
 
 def _normalized_origin(value: str, *, allow_path: bool) -> str | None:

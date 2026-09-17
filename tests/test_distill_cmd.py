@@ -107,8 +107,21 @@ def test_distill_unconfigured_tty_prompts_and_uses_selection_once(
             )
         ],
     )
+    from lociaction.adapters.harness.model_catalog import HarnessModelCatalog
 
-    result = runner.invoke(app, ["distill"], input="1\n")
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.model_catalog.discover_project_harness_models",
+        lambda root: (
+            HarnessModelCatalog(
+                harness_id="claude",
+                label="Claude Code",
+                client_id="claude-cli",
+                models=(),
+            ),
+        ),
+    )
+
+    result = runner.invoke(app, ["distill"], input="1\n1\n")
 
     assert result.exit_code == 0
     assert len(calls) == 1
@@ -178,9 +191,7 @@ def test_distill_configured_ready_uses_it_without_prompting(
     assert calls[0].provider == "claude"
 
 
-def test_distill_llamacpp_ft_non_tty_starts_server(
-    tmp_path, monkeypatch
-) -> None:
+def test_distill_llamacpp_ft_non_tty_starts_server(tmp_path, monkeypatch) -> None:
     """configured llamacpp-ft は非対話でもサーバを起動し base_url を差し替える。
     選択/セットアップの TTY ゲートとは独立。"""
     lociaction_dir = _init_project(tmp_path, monkeypatch)
@@ -227,9 +238,7 @@ def test_distill_llamacpp_ft_non_tty_starts_server(
     assert calls[0].provider == "openai"
 
 
-def test_distill_llamacpp_ft_start_failure_exits_nonzero(
-    tmp_path, monkeypatch
-) -> None:
+def test_distill_llamacpp_ft_start_failure_exits_nonzero(tmp_path, monkeypatch) -> None:
     from lociaction.adapters.model.llama_server import LlamaServerError
 
     lociaction_dir = _init_project(tmp_path, monkeypatch)
@@ -263,7 +272,6 @@ def test_distill_llamacpp_ft_start_failure_exits_nonzero(
     assert calls == []
 
 
-
 def test_distill_llamacpp_ft_skips_server_when_no_pending_work(
     tmp_path, monkeypatch
 ) -> None:
@@ -288,9 +296,7 @@ def test_distill_llamacpp_ft_skips_server_when_no_pending_work(
     def _boom(*a, **k):
         raise AssertionError("llama-server must not start with no pending work")
 
-    monkeypatch.setattr(
-        "lociaction.adapters.model.llama_server.spec_for_model", _boom
-    )
+    monkeypatch.setattr("lociaction.adapters.model.llama_server.spec_for_model", _boom)
     monkeypatch.setattr(
         "lociaction.adapters.model.llama_server.LlamaServerProcess", _boom
     )
@@ -321,8 +327,9 @@ def test_distill_rejects_symlinked_lock_file(tmp_path, monkeypatch) -> None:
     assert outside.read_text() == "must remain unchanged"
 
 
-
-def test_distill_error_progress_sanitizes_terminal_output(tmp_path, monkeypatch) -> None:
+def test_distill_error_progress_sanitizes_terminal_output(
+    tmp_path, monkeypatch
+) -> None:
     """distill_all の on_progress error callback は蒸留失敗テキストに含まれうる
     端末制御シーケンスを出力へ残さない (LOCI-DISTILL-ERROR-ESCAPE-01)。"""
     lociaction_dir = _init_project(tmp_path, monkeypatch)
@@ -349,6 +356,39 @@ def test_distill_error_progress_sanitizes_terminal_output(tmp_path, monkeypatch)
     result = runner.invoke(app, ["distill"])
 
     assert "\x1b" not in result.output
+
+
+def test_distill_renders_successful_progress_on_one_line(tmp_path, monkeypatch) -> None:
+    """Each completed exchange rewrites the counter instead of adding output rows."""
+    lociaction_dir = _init_project(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOCIACTION_REMOTE_DISTILL_CLIENTS", "claude-cli")
+    _write_config(lociaction_dir, '[distill]\nclient = "claude-cli"\n')
+    monkeypatch.setattr("lociaction.cli.distill_cmd._is_interactive", lambda: False)
+    monkeypatch.setattr(
+        "lociaction.adapters.model.registry.check_ready",
+        lambda client_id: ClientStatus(
+            id="claude-cli",
+            label="Claude CLI",
+            state="ready",
+            reason="ready",
+            client=_CLAUDE_CLIENT,
+        ),
+    )
+
+    def _fake_distill_all(db, **kwargs):
+        kwargs["on_progress"](1, 2)
+        kwargs["on_progress"](2, 2)
+        return (2, 0)
+
+    monkeypatch.setattr("lociaction.distiller.distill_all", _fake_distill_all)
+
+    result = runner.invoke(app, ["distill"])
+
+    assert result.exit_code == 0
+    assert "\rDistilling 1/2\rDistilling 2/2\n" in result.output
+    assert "[1/2] distilled" not in result.output
+
+
 # ---- --setup ----
 
 
@@ -374,8 +414,21 @@ def test_distill_setup_saves_selection_to_config(tmp_path, monkeypatch) -> None:
             ),
         ],
     )
+    from lociaction.adapters.harness.model_catalog import HarnessModelCatalog
 
-    result = runner.invoke(app, ["distill", "--setup"], input="2\n")
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.model_catalog.discover_project_harness_models",
+        lambda root: (
+            HarnessModelCatalog(
+                harness_id="claude",
+                label="Claude Code",
+                client_id="claude-cli",
+                models=(),
+            ),
+        ),
+    )
+
+    result = runner.invoke(app, ["distill", "--setup"], input="2\n1\n")
 
     assert result.exit_code == 0
     config = (lociaction_dir / "config.toml").read_text()
