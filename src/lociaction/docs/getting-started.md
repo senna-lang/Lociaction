@@ -33,7 +33,11 @@ Run from the project root:
 loci init
 ```
 
-This creates `.lociaction/` (including `memory.db` and `config.toml`), writes a short reminder into `AGENTS.md`, and installs Claude Code hooks unless `--no-hooks` is passed. If init fails partway through, a newly created `.lociaction/` is removed so re-running is safe.
+This creates `.lociaction/` (including `memory.db` and `config.toml`), indexes
+existing sessions from every detected harness, writes a short reminder into
+`AGENTS.md`, and installs Claude Code hooks unless `--no-hooks` is passed. If
+init fails partway through, a newly created `.lociaction/` is removed so
+re-running is safe.
 
 When past session logs already exist, init asks:
 

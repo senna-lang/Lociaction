@@ -75,7 +75,7 @@ Requires Python 3.11+.
 loci init
 ```
 
-`loci init` creates the project-local database, writes the common `AGENTS.md` instruction section, and installs Claude Code hooks unless `--no-hooks` is supplied. Every other supported harness (Codex, Grok, Oh My Pi, OpenCode) also has full native lifecycle hook support — register it explicitly with `loci hook install --harness <name>`. If init fails partway through, `.lociaction/` is cleaned up automatically so re-running is safe.
+`loci init` creates the project-local database, indexes existing sessions from every detected harness with one threshold and history-distillation policy, writes the common `AGENTS.md` instruction section, and installs Claude Code hooks unless `--no-hooks` is supplied. Every other supported harness (Codex, Grok, Oh My Pi, OpenCode) also has full native lifecycle hook support — register it explicitly with `loci hook install --harness <name>`. If init fails partway through, `.lociaction/` is cleaned up automatically so re-running is safe.
 
 When running `loci init`, if past session logs are detected, you'll be prompted with:
 

@@ -131,6 +131,10 @@ def _setup_project_with_sessions(
         "lociaction.paths.resolve_claude_projects_path",
         lambda _root: projects_dir,
     )
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.registry.resolve_claude_projects_path",
+        lambda _root: projects_dir,
+    )
 
     return projects_dir
 
@@ -241,13 +245,17 @@ def test_ensure_lociaction_ignored_rejects_symlinked_gitignore(tmp_path):
 
 
 def test_init_prints_banner(tmp_path, monkeypatch):
-    """init 実行時に ASCII アートバナーとサブタイトルが表示される"""
+    """init 実行時に Method of Loci を表す部屋グリッドのマーク（4部屋のうち1つが
+    光る）、ワードマーク、タグラインが表示される（旧 ASCII 文字壁も汎用的な単線
+    マークも回廊モチーフも表示されない）"""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     result = runner.invoke(app, ["init", "--no-local-distiller"])
     assert result.exit_code == 0
-    assert "█████  ███   ████ █████" in result.output
-    assert r"|_____\___/ \____|___/_/   \_\____|" not in result.output
+    assert "╭───┬───╮" in result.output
+    assert "▓" in result.output
+    assert "lociaction" in result.output
+    assert "█" not in result.output
     assert "code-aware and semantic recall for your coding agent" in result.output
 
 
@@ -504,6 +512,102 @@ def test_init_min_chars_flag_skips_prompt(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0
     assert "Min chars threshold" not in result.output
+
+
+def test_init_indexes_and_skips_existing_jsonl_harness_history(
+    tmp_path, monkeypatch
+) -> None:
+    """Initial setup applies one threshold and skip policy to JSONL harnesses."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    fixture = Path(__file__).parent / "fixtures" / "harness_logs" / "codex.jsonl"
+    sessions_dir = tmp_path / "codex_sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "rollout-synthetic.jsonl").write_text(
+        fixture.read_text()
+        .replace('"/repo', f'"{tmp_path}')
+        .replace(
+            "fs.list_dir を Result 型にして", "fs.list_dir を Result 型にして。" * 4
+        )
+        .replace("list_dir を編集します。", "list_dir を編集します。" * 4)
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.registry.resolve_codex_sessions_path",
+        lambda: sessions_dir,
+    )
+    omp_fixture = Path(__file__).parent / "fixtures" / "harness_logs" / "omp_pi.jsonl"
+    omp_sessions_dir = tmp_path / "omp_sessions"
+    omp_sessions_dir.mkdir()
+    (omp_sessions_dir / "2026-08-01T00-00-00-000Z_synthetic.jsonl").write_text(
+        omp_fixture.read_text()
+        .replace('"/repo', f'"{tmp_path}')
+        .replace("list_dir を Result 型にして", "list_dir を Result 型にして。" * 4)
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.registry.resolve_omp_pi_sessions_path",
+        lambda _root: omp_sessions_dir,
+    )
+
+    result = runner.invoke(
+        app, ["init", "--no-local-distiller", "--skip-existing"], input="1\n"
+    )
+
+    assert result.exit_code == 0
+    assert "loci hook install --harness codex" in result.output
+    assert "loci hook install --harness omp-pi" in result.output
+    con = get_connection(tmp_path / ".lociaction" / "memory.db")
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE harness = 'codex'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE harness = 'codex' "
+            "AND distilled_at = 'skipped'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM exchanges WHERE harness = 'omp-pi' "
+            "AND distilled_at = 'skipped'"
+        ).fetchone()[0]
+        > 0
+    )
+    con.close()
+
+
+def test_init_prompts_threshold_for_non_claude_harness_session(
+    tmp_path, monkeypatch
+) -> None:
+    """A detected non-Claude session still configures future index filtering."""
+    from lociaction.adapters.harness.model_catalog import HarnessModelCatalog
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(
+        "lociaction.paths.resolve_claude_projects_path", lambda root: None
+    )
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.model_catalog.discover_project_harness_models",
+        lambda root: (
+            HarnessModelCatalog(
+                harness_id="codex",
+                label="Codex",
+                client_id="codex-cli",
+                models=(),
+            ),
+        ),
+    )
+    monkeypatch.setattr("lociaction.adapters.model.registry.discover", lambda: [])
+
+    result = runner.invoke(app, ["init", "--no-local-distiller"], input="2\n")
+
+    assert result.exit_code == 0
+    assert "Min chars threshold" in result.output
+    assert "min_chars = 100" in (tmp_path / ".lociaction" / "config.toml").read_text()
 
 
 # ---- distill priority ----
@@ -1158,7 +1262,8 @@ def test_init_selects_recorded_claude_model_from_project_harness(tmp_path, monke
         ),
     )
 
-    result = runner.invoke(app, ["init"], input="2\n2\n")
+    # min_chars [1]=50 → source [2]=Claude → history model [1]。
+    result = runner.invoke(app, ["init"], input="1\n2\n1\n")
     assert result.exit_code == 0
 
     config = (tmp_path / ".lociaction" / "config.toml").read_text()

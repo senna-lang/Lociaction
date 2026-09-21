@@ -30,6 +30,7 @@ DISCOVERABLE_CLIENT_IDS = (
 
 _LLAMACPP_FT_LABEL = "llama.cpp (local FT + speculative decoding)"
 
+
 def detect_llamacpp_ft() -> ClientStatus:
     """llama-server + FT/draft GGUF blob の有無を確認する。
 
@@ -112,7 +113,6 @@ def detect_claude_cli() -> ClientStatus:
     )
 
 
-
 def detect_codex_cli() -> ClientStatus:
     """codex CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
     if shutil.which("codex") is None:
@@ -159,6 +159,7 @@ def detect_gemini_cli() -> ClientStatus:
             label="Gemini CLI",
         ),
     )
+
 
 def detect_grok_cli() -> ClientStatus:
     """grok CLI の PATH 有無のみ確認する（login probe はしない — claude-cli と同方針、D7）"""
@@ -290,8 +291,7 @@ def setup(client_id: str) -> tuple[bool, str]:
 def _pull_ollama_model(model: str) -> tuple[bool, str]:
     if shutil.which("ollama") is None:
         return False, (
-            "ollama binary not found — install from "
-            "https://ollama.com then retry"
+            "ollama binary not found — install from https://ollama.com then retry"
         )
     try:
         result = subprocess.run(
@@ -435,19 +435,15 @@ def check_ready(client_id: str) -> ClientStatus:
     return detector()
 
 
-def write_client_config(config_path, client: ModelClient) -> None:
-    """config.toml の [distill] を client/model/base_url で上書きする（他セクションは保持、
-    legacy `provider` キーは書かない）。init と `loci distill --setup` の共通実装。
+def write_client_config(
+    config_path, client: ModelClient, *, index_min_chars: int | None = None
+) -> None:
+    """Write ``[distill]`` while preserving other config sections.
 
-    値は tomli_w でシリアライズする（手書き f-string 組み立てだと base_url/model に
-    `"` や `\\` が含まれた際に config.toml が壊れ、次回起動のパースが失敗するため）。
-
-    leaf の open は `open_dir_relative()`（openat 相当）で行い、is_symlink()
-    チェックと別の write_text() 呼び出しの間に symlink を仕込まれる TOCTOU
-    window も、親 `.lociaction/` 自体を後から symlink にすり替えるレースも
-    構造的に閉じる（`.gitignore`/`distill.lock` に既に適用済みの同じパターンを
-    dir_fd 経由へ強化したもの。LOCI-REGISTRY-CONFIG-TOCTOU-01 /
-    LOCI-REGISTRY-CONFIGDIR-TOCTOU-01）。
+    ``index_min_chars`` lets interactive init persist its explicit index
+    threshold; ordinary setup preserves an existing valid ``[index]`` value.
+    Values are TOML-serialized, and all leaf access uses
+    ``open_dir_relative()`` to reject symlink replacement races.
     """
     import errno
     import os
@@ -467,9 +463,7 @@ def write_client_config(config_path, client: ModelClient) -> None:
         read_fd = None
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            raise ValueError(
-                f"refusing symlinked config file: {config_path}"
-            ) from exc
+            raise ValueError(f"refusing symlinked config file: {config_path}") from exc
         raise
     if read_fd is not None:
         try:
@@ -529,11 +523,21 @@ def write_client_config(config_path, client: ModelClient) -> None:
     # 経ずに手書き f-string へ埋め込むと TOML injection になる
     # (LOCI-REGISTRY-TOML-INJECT-INDEX)。[distill] と同様 tomli_w でシリアライズする。
     raw_index = existing.get("index", {})
-    raw_index_min_chars = raw_index.get("min_chars") if isinstance(raw_index, dict) else None
-    if isinstance(raw_index_min_chars, int) and not isinstance(
-        raw_index_min_chars, bool
+    existing_index_min_chars = (
+        raw_index.get("min_chars") if isinstance(raw_index, dict) else None
+    )
+    if index_min_chars is not None:
+        if isinstance(index_min_chars, bool) or index_min_chars < 1:
+            raise ValueError("index_min_chars must be a positive integer")
+        output_index_min_chars = index_min_chars
+    elif isinstance(existing_index_min_chars, int) and not isinstance(
+        existing_index_min_chars, bool
     ):
-        lines.append(tomli_w.dumps({"min_chars": raw_index_min_chars}).rstrip("\n"))
+        output_index_min_chars = existing_index_min_chars
+    else:
+        output_index_min_chars = None
+    if output_index_min_chars is not None:
+        lines.append(tomli_w.dumps({"min_chars": output_index_min_chars}).rstrip("\n"))
     else:
         lines.append("# min_chars = 50   # trivial フィルタ閾値（文字数）")
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -546,9 +550,7 @@ def write_client_config(config_path, client: ModelClient) -> None:
         )
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            raise ValueError(
-                f"refusing symlinked config file: {config_path}"
-            ) from exc
+            raise ValueError(f"refusing symlinked config file: {config_path}") from exc
         raise
     with os.fdopen(write_fd, "w") as f:
         f.write("\n".join(lines))

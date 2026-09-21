@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from lociaction.adapters.harness import codex as codex_adapter
 from lociaction.utils import sanitize_terminal_text
 
 _HARNESS_CHOICES = ("claude", "codex", "opencode", "omp-pi", "grok")
@@ -16,32 +16,6 @@ _HARNESS_CHOICES = ("claude", "codex", "opencode", "omp-pi", "grok")
 # 同居することがあるため（grok の prompt_history.jsonl / events.jsonl）、
 # 素朴な "*.jsonl" では拾いすぎる。
 _LOG_PATTERNS = {"codex": "rollout-*.jsonl", "grok": "updates.jsonl"}
-
-
-def _codex_belongs_to_project(rollout: Path, project_root: Path) -> bool:
-    """Accept only rollout logs whose recorded cwd is inside project_root."""
-    root = project_root.resolve()
-    try:
-        with rollout.open() as stream:
-            for line in stream:
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if entry.get("type") not in {"session_meta", "turn_context"}:
-                    continue
-                payload = entry.get("payload")
-                cwd = payload.get("cwd") if isinstance(payload, dict) else None
-                if not isinstance(cwd, str) or not cwd:
-                    continue
-                try:
-                    Path(cwd).resolve().relative_to(root)
-                except ValueError:
-                    return False
-                return True
-    except OSError:
-        return False
-    return False
 
 
 def _purge_foreign_codex_exchanges(db: Path, project_root: Path) -> int:
@@ -60,10 +34,8 @@ def _purge_foreign_codex_exchanges(db: Path, project_root: Path) -> int:
             in_scope = scope_by_rollout.get(rollout)
             if in_scope is None:
                 rollout_path = Path(rollout)
-                in_scope = (
-                    True
-                    if not rollout_path.exists()
-                    else _codex_belongs_to_project(rollout_path, project_root)
+                in_scope = not rollout_path.exists() or (
+                    codex_adapter.session_belongs_to_project(rollout_path, project_root)
                 )
                 scope_by_rollout[rollout] = in_scope
             if not in_scope:
@@ -212,7 +184,7 @@ def index(
         jsonl_files = [
             rollout
             for rollout in jsonl_files
-            if _codex_belongs_to_project(rollout, root)
+            if codex_adapter.session_belongs_to_project(rollout, root)
         ]
     elif harness in {"claude", "omp-pi"}:
         jsonl_files = session_files_for_project(

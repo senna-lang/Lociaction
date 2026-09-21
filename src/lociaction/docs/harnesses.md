@@ -16,7 +16,10 @@ Lociaction indexes session logs from five harnesses into the same exchange, code
 | Oh My Pi | Project JSONL | `~/.omp/agent/extensions/lociaction.ts` |
 | OpenCode | Local session SQLite | `~/.config/opencode/plugins/lociaction.ts` |
 
-`loci init` installs Claude Code hooks unless `--no-hooks` is passed. Register any harness explicitly:
+`loci init` indexes existing sessions from every detected harness using one
+threshold and one history-distillation decision. It installs only Claude Code
+hooks unless `--no-hooks` is passed. Register any other detected harness
+explicitly:
 
 ```bash
 loci hook install --harness claude

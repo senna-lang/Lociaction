@@ -2,12 +2,40 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from lociaction.adapters.harness.unified_diff import parse_unified_diff
 from lociaction.models import CodeLocator, CodeTouch, FileOnly, TextAnchor
 
 _CHANGE_TYPES = frozenset({"add", "delete", "update"})
+
+
+def session_belongs_to_project(rollout: Path, project_root: Path) -> bool:
+    """Return whether a Codex rollout was started inside ``project_root``."""
+    root = project_root.resolve()
+    try:
+        with rollout.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") not in {"session_meta", "turn_context"}:
+                    continue
+                payload = entry.get("payload")
+                cwd = payload.get("cwd") if isinstance(payload, dict) else None
+                if not isinstance(cwd, str) or not cwd:
+                    continue
+                try:
+                    Path(cwd).resolve().relative_to(root)
+                except (OSError, RuntimeError, ValueError):
+                    return False
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def edit_capability() -> str:

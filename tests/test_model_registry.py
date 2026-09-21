@@ -44,7 +44,6 @@ def test_detect_claude_cli_ready(monkeypatch) -> None:
     assert status.client.provider == "claude"
 
 
-
 # ---- detect_codex_cli ----
 
 
@@ -144,6 +143,7 @@ def test_detect_omp_cli_ready(monkeypatch) -> None:
     assert status.client.provider == "omp"
     assert status.client.model is None
 
+
 # ---- discover / ready_clients / recommended_id ----
 
 
@@ -172,7 +172,9 @@ def test_ready_clients_filters_by_state() -> None:
 
 def test_recommended_id_prefers_llamacpp_ft() -> None:
     statuses = [
-        ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
+        ClientStatus(
+            id="claude-cli", label="Claude CLI", state="ready", reason="ready"
+        ),
         ClientStatus(
             id="llamacpp-ft", label="llama.cpp", state="ready", reason="ready"
         ),
@@ -182,7 +184,9 @@ def test_recommended_id_prefers_llamacpp_ft() -> None:
 
 def test_recommended_id_prefers_setupable_llamacpp_ft() -> None:
     statuses = [
-        ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
+        ClientStatus(
+            id="claude-cli", label="Claude CLI", state="ready", reason="ready"
+        ),
         ClientStatus(
             id="llamacpp-ft",
             label="llama.cpp",
@@ -195,7 +199,9 @@ def test_recommended_id_prefers_setupable_llamacpp_ft() -> None:
 
 def test_recommended_id_falls_back_to_first_ready_when_ft_not_ready() -> None:
     statuses = [
-        ClientStatus(id="claude-cli", label="Claude CLI", state="ready", reason="ready"),
+        ClientStatus(
+            id="claude-cli", label="Claude CLI", state="ready", reason="ready"
+        ),
     ]
     assert recommended_id(statuses) == "claude-cli"
 
@@ -247,7 +253,6 @@ def test_resolve_client_claude_cli(monkeypatch) -> None:
     client = resolve_client("claude-cli", cfg)
     assert client.provider == "claude"
     assert client.base_url is None
-
 
 
 def test_resolve_client_codex_cli_passes_through_configured_model() -> None:
@@ -399,6 +404,24 @@ def test_write_client_config_writes_client_model_base_url(tmp_path) -> None:
     assert "provider" not in content
 
 
+def test_write_client_config_persists_explicit_index_threshold(tmp_path) -> None:
+    """Interactive init can persist the threshold selected for future indexing."""
+    from lociaction.adapters.model.types import ModelClient
+
+    config_path = tmp_path / "config.toml"
+    client = ModelClient(
+        id="codex-cli",
+        provider="codex",
+        model="gpt-5.6-luna",
+        base_url=None,
+        label="Codex CLI",
+    )
+
+    write_client_config(config_path, client, index_min_chars=200)
+
+    assert "min_chars = 200" in config_path.read_text()
+
+
 def test_write_client_config_rejects_symlinked_config_file(tmp_path) -> None:
     """setup が project state 内の leaf symlink target を上書きしない。"""
     from lociaction.adapters.model.types import ModelClient
@@ -514,7 +537,9 @@ def test_write_client_config_preserves_index_min_chars(tmp_path) -> None:
     from lociaction.adapters.model.types import ModelClient
 
     config_path = tmp_path / "config.toml"
-    config_path.write_text('[distill]\nprovider = "claude"\n\n[index]\nmin_chars = 200\n')
+    config_path.write_text(
+        '[distill]\nprovider = "claude"\n\n[index]\nmin_chars = 200\n'
+    )
     client = ModelClient(
         id="claude-cli",
         provider="claude",
@@ -554,8 +579,6 @@ def test_write_client_config_rejects_non_integer_index_min_chars(tmp_path) -> No
 
     parsed = tomllib.loads(content)
     assert "injected" not in parsed
-
-
 
 
 def test_write_client_config_ignores_malformed_distill_section(tmp_path) -> None:

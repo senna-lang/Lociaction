@@ -24,4 +24,6 @@ Privacy guidance lives in `--help` and in this document. Lociaction never mixes 
 
 Project state lives under `.lociaction/` (`memory.db`, `config.toml`, sockets, locks). Do not commit `.lociaction/`, personal session logs, or local model data. Distillation clients receive exchange text; a paid cloud CLI will send that text to the provider. Use `llamacpp-ft` or `openai-compat` against a local endpoint when the corpus must stay on the machine.
 
+During interactive setup, selecting Codex reads its local CLI OAuth credential only to request that account's model catalog. Lociaction does not print, save, or send that credential anywhere except the Codex backend; this catalog request contains no session transcript or project source. Grok, OpenCode, and Oh My Pi run their own installed model-list commands and keep their credential handling inside those CLIs.
+
 See `loci docs show distillation`.

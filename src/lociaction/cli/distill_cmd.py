@@ -23,25 +23,52 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _prompt_index(prompt: str, count: int, *, default: int) -> int:
-    """Return a validated one-based menu index without treating typos as selection."""
-    while True:
-        raw = typer.prompt(prompt, default=str(default)).strip()
-        if raw.isdigit() and 1 <= int(raw) <= count:
-            return int(raw)
-        typer.echo(f"  Invalid choice. Please enter one of: 1-{count}.")
+def _select_harness_model(catalog: HarnessModelCatalog) -> str | None:
+    """Select a live catalog when the harness exposes one, else its history.
 
+    Claude has no documented noninteractive availability catalog.  Codex,
+    Grok, OpenCode, and Oh My Pi expose one through their authenticated CLI or
+    backend; a failed lookup falls back to project-local recorded model IDs.
+    """
+    from lociaction.adapters.harness.model_catalog import (
+        discover_available_harness_models,
+    )
+    from lociaction.cli.interactive import prompt_text, select_index
 
-def _select_recorded_model(catalog: HarnessModelCatalog) -> str | None:
-    """Prompt for a selected harness's project-local model history."""
-    choices: list[tuple[str, str | None]] = [
-        ("Harness default", None),
-        *((model, model) for model in catalog.models),
-    ]
-    typer.echo(f"Models used by {catalog.label} in this project:")
-    for i, (label, _model) in enumerate(choices, start=1):
-        typer.echo(f"  {i}. {label}")
-    return choices[_prompt_index("Select model", len(choices), default=1) - 1][1]
+    available_models = discover_available_harness_models(catalog.harness_id)
+    if available_models is None:
+        models = catalog.models
+        heading = f"Models previously used by {catalog.label} in this project:"
+        if catalog.harness_id != "claude":
+            typer.echo(
+                f"  Could not query the current {catalog.label} model catalog. "
+                "Showing this project's recorded history instead."
+            )
+    else:
+        models = available_models
+        heading = f"Models currently available to this {catalog.label} account:"
+
+    choices: list[tuple[str, str | None]] = [(model, model) for model in models]
+    choices.append(("Harness default", None))
+    labels = [label for label, _model in choices]
+    labels.append("Custom — type a model ID")
+    custom_idx = len(labels) - 1
+    default = len(models)
+
+    idx = select_index(
+        (
+            f"{heading}\n"
+            "  Distillation is a small per-exchange task — "
+            "a lower-cost model is recommended."
+        ),
+        labels,
+        default=default,
+        prompt_label="Select model",
+        numbering="dot",
+    )
+    if idx == custom_idx:
+        return prompt_text("Model ID:", prompt_label="Model ID")
+    return choices[idx][1]
 
 
 def _warn_if_remote_grant_missing(client_id: str) -> None:
@@ -71,11 +98,12 @@ def _warn_if_remote_grant_missing(client_id: str) -> None:
 def prompt_client_selection(
     root, *, include_setupable: bool = True
 ) -> ModelClient | None:
-    """Select the local FT model or a project harness then one of its recorded models.
+    """Select a local distiller or project harness and then its model.
 
     A harness appears only when it has sessions for ``root`` and its matching
-    distillation CLI is ready. Model IDs come from those local session logs;
-    the default option leaves the harness's own default model unchanged.
+    distillation CLI is ready. After selection, a harness-specific live
+    catalog is preferred when supported; local session history is an explicit
+    fallback.
     """
     from lociaction.adapters.harness.model_catalog import (
         HarnessModelCatalog,
@@ -88,6 +116,7 @@ def prompt_client_selection(
         selectable_clients,
         setup,
     )
+    from lociaction.cli.interactive import select_index
     from lociaction.config import load_config
 
     statuses = discover()
@@ -113,28 +142,34 @@ def prompt_client_selection(
         )
         return None
 
-    typer.echo("Available distillation sources:")
-    for i, (kind, choice) in enumerate(choices, start=1):
+    labels = []
+    for kind, choice in choices:
         if kind == "local":
             status = cast(ClientStatus, choice)
             marks = " (needs setup)" if status.state == "setupable" else ""
-            typer.echo(f"  {i}. {status.label} [{status.id}]{marks}")
+            labels.append(f"{status.label} [{status.id}]{marks}")
         else:
             catalog = cast(HarnessModelCatalog, choice)
-            typer.echo(f"  {i}. {catalog.label} [{catalog.harness_id}]")
+            labels.append(f"{catalog.label} [{catalog.harness_id}]")
 
     local_default = next(
-        (i for i, (kind, _choice) in enumerate(choices, start=1) if kind == "local"),
-        1,
+        (i for i, (kind, _choice) in enumerate(choices) if kind == "local"),
+        0,
     )
     kind, choice = choices[
-        _prompt_index("Select source", len(choices), default=local_default) - 1
+        select_index(
+            "Available distillation sources:",
+            labels,
+            default=local_default,
+            prompt_label="Select source",
+            numbering="dot",
+        )
     ]
     if kind == "harness":
         catalog = cast(HarnessModelCatalog, choice)
         status = ready_by_client[catalog.client_id]
         client = status.client or resolve_client(status.id, load_config(root))
-        client = replace(client, model=_select_recorded_model(catalog))
+        client = replace(client, model=_select_harness_model(catalog))
     else:
         status = cast(ClientStatus, choice)
         if status.state == "setupable":

@@ -20,6 +20,7 @@ from lociaction.cli.eval_cmd import eval_app
 from lociaction.cli.gc_cmd import gc
 from lociaction.cli.hook_cmd import hook_app
 from lociaction.cli.index_cmd import index
+from lociaction.cli.interactive import select_index
 from lociaction.cli.prime_cmd import prime
 from lociaction.cli.recall_cmd import recall
 from lociaction.cli.search_cmd import context, search
@@ -41,35 +42,61 @@ app = typer.Typer(
 
 DEFAULT_DISTILL_RECENT = 50
 
-_BANNER = """██     ███   ████ █████  ███   ████ █████ █████  ███  ██  ██
-██    ██ ██ ██      ██  ██ ██ ██      ██    ██  ██ ██ ███ ██
-██    ██ ██ ██      ██  █████ ██      ██    ██  ██ ██ ██████
-██    ██ ██ ██      ██  ██ ██ ██      ██    ██  ██ ██ ██ ███
-█████  ███   ████ █████ ██ ██  ████   ██  █████  ███  ██  ██"""
 
-_GRADIENT_BLUE = ["#7bb8ff", "#6aafff", "#4a9eff", "#2f70d0", "#1b45a8"]
+# Method of Loci（複数の場所=lociに記憶を紐づけて辿る記憶術）をそのまま間取り図
+# として9x5の罫線文字ピクトグラムにしたもの。4部屋のうち1部屋が光っており、
+# 「たくさんの loci の中から目的の記憶が見つかる」様子を表す。実装上も1つの
+# exchange は複数の room（`room_type`/`room_label`）にタグ付けされるため、比喩
+# ではなく実際のデータモデルと一致する。
+_MARK_LINES = [
+    "╭───┬───╮",
+    "│   │ ▓ │",
+    "├───┼───┤",
+    "│   │   │",
+    "╰───┴───╯",
+]
 
 
 def _print_banner() -> None:
-    """init コマンド冒頭のバナーを Panel で表示する"""
+    """init コマンド冒頭に、ブランドの間取り図アイコン（4部屋のうち1つが光る）と
+    ワードマークのロックアップを表示する。
+
+    左に Method of Loci を表す部屋グリッドを白黒の強弱で、右にワードマーク・
+    タグライン・バージョンを縦位置を合わせて並べる。旧来の5行 ASCII 文字壁、
+    汎用的な「● + 小文字ロゴ」単線バナー、回廊モチーフはいずれも廃止
+    （フィードバック: 個性がない／回廊よりも「部屋」の比喩の方が直接的）。
+    """
     from rich.console import Console
-    from rich.panel import Panel
     from rich.text import Text
 
     from lociaction import __version__
 
     console = Console(soft_wrap=True)
 
-    content = Text()
-    for line, color in zip(_BANNER.split("\n"), _GRADIENT_BLUE, strict=True):
-        content.append(line + "\n", style=f"bold {color}")
-    content.append("\n")
-    content.append("● ", style="bright_cyan")
-    content.append("code-aware and semantic recall for your coding agent", style="dim")
-    content.append("   ")
-    content.append(f"v{__version__}", style="dim cyan")
+    side_lines: dict[int, tuple[str, str]] = {
+        1: ("lociaction", "bold"),
+        2: ("code-aware and semantic recall for your coding agent", "dim"),
+        3: (f"v{__version__}", "dim"),
+    }
 
-    console.print(Panel(content, border_style="blue", padding=(1, 3), expand=False))
+    content = Text()
+    for row, line in enumerate(_MARK_LINES):
+        content.append("  ")
+        for ch in line:
+            if ch == "▓":
+                content.append(ch, style="bold")
+            else:
+                content.append(ch, style="dim")
+        if row in side_lines:
+            text, style = side_lines[row]
+            content.append("  ")
+            content.append(text, style=style)
+        if row < len(_MARK_LINES) - 1:
+            content.append("\n")
+
+    console.print()
+    console.print(content)
+    console.print()
 
 
 def _cleanup_partial_lociaction_dir(lociaction_dir: Path, dir_preexisted: bool) -> None:
@@ -208,14 +235,7 @@ def init(
 ) -> None:
     """Initialize `.lociaction/memory.db` in the project root."""
     from lociaction.db import get_connection, init_db
-    from lociaction.indexer import index_file, parse_exchanges
-    from lociaction.paths import (
-        db_path,
-        find_project_root,
-        open_dir_relative,
-        resolve_claude_projects_path,
-        session_files_for_project,
-    )
+    from lociaction.paths import db_path, find_project_root, open_dir_relative
 
     _print_banner()
 
@@ -226,48 +246,23 @@ def init(
         typer.echo(f"Already initialized: {db}")
         return
 
-    # 既存セッションの検出
-    target_dir = resolve_claude_projects_path(root)
-    jsonl_files = session_files_for_project(target_dir, root) if target_dir else []
+    from lociaction.adapters.harness.model_catalog import (
+        discover_project_harness_models,
+    )
 
-    # --- 対話フェーズ（DB 作成前にすべての質問を完了する） ---
-    resolved_min_chars = 50
+    # All supported harnesses participate in setup.  Exact exchange counts are
+    # available only after indexing, so the threshold picker intentionally does
+    # not promise per-threshold counts before the database exists.
+    project_harnesses = discover_project_harness_models(root)
+    resolved_min_chars = (
+        _resolve_min_chars(None, min_chars)
+        if project_harnesses
+        else (min_chars if min_chars is not None else 50)
+    )
     skip_count = 0
     skip_strategy = "recent"
-    total_exchanges = 0
     run_distill_now = False
-    parsed_exchanges_by_file: dict[Path, list[Exchange]] = {}
-
-    if jsonl_files:
-        # min_chars=0 で全ファイルを一度だけフルパースし、閾値集計・総数カウント・
-        # 実インデックスの3箇所で使い回す（同一ファイルの3重パースを避ける、issue #25）
-        parsed_exchanges_by_file = {
-            jsonl: parse_exchanges(jsonl, min_chars=0) for jsonl in jsonl_files
-        }
-        all_exchanges = [ex for exs in parsed_exchanges_by_file.values() for ex in exs]
-
-        resolved_min_chars = _resolve_min_chars(all_exchanges, min_chars)
-
-        total_exchanges = sum(
-            1
-            for ex in all_exchanges
-            if len(ex.user_content) + len(ex.agent_content) >= resolved_min_chars
-        )
-
-        if total_exchanges > 0:
-            skip_count, skip_strategy = _resolve_skip_count(
-                total_exchanges, skip_existing, distill_limit
-            )
-
-            distill_count = total_exchanges - skip_count
-            if distill_count > 0:
-                run_distill_now = _ask_run_distill_now(distill_count)
-
-    chosen_client = _resolve_init_distill_client(
-        root,
-        no_local_distiller=no_local_distiller,
-        distill_client_flag=distill_client,
-    )
+    chosen_client = None
 
     # --- 実行フェーズ（ここから DB・ファイルを作成） ---
     # 失敗時は作成した .lociaction/ を掃除して次回再実行できる状態に戻す
@@ -304,7 +299,9 @@ def init(
             if chosen_client is not None:
                 from lociaction.adapters.model.registry import write_client_config
 
-                write_client_config(config_path, chosen_client)
+                write_client_config(
+                    config_path, chosen_client, index_min_chars=resolved_min_chars
+                )
                 # write_client_config は既定で [distill]/[index] のみ生成する。
                 # init 由来のコメント（batch_limit/min_chars 案内）を後段に追記する。
                 # write_client_config は O_NOFOLLOW で作成済みだが、ここで別の
@@ -369,7 +366,7 @@ def init(
                             "# min_chars = 100   # この文字数未満の exchange は蒸留スキップ\n"
                             "\n"
                             "[index]\n"
-                            "# min_chars = 50   # trivial フィルタ閾値（文字数）\n"
+                            f"min_chars = {resolved_min_chars}\n"
                         )
 
         typer.echo(f"Initialized: {db}")
@@ -404,33 +401,68 @@ def init(
             err=True,
         )
 
-    # --- 既存 exchange のインデックス化（失敗時は今回作成分の .lociaction/ を掃除） ---
+    # --- 既存 exchange のインデックス化と蒸留方針の決定 ---
+    # DB を作成した後に全 harness を同じ indexer へ通す。選択済みの threshold
+    # を使うため、各 harness の形式差を setup flow に漏らさない。
     try:
-        if total_exchanges > 0:
-            actual_total = 0
-            for jsonl in jsonl_files:
+        from lociaction.adapters.harness.registry import detected_jsonl_sources
+        from lociaction.indexer import index_file, index_opencode_db
+        from lociaction.paths import resolve_opencode_db_path
+
+        actual_total = 0
+        files_with_new = 0
+        for source in detected_jsonl_sources():
+            for session in source.list_sessions(root):
                 try:
-                    filtered = [
-                        ex
-                        for ex in parsed_exchanges_by_file[jsonl]
-                        if len(ex.user_content) + len(ex.agent_content)
-                        >= resolved_min_chars
-                    ]
-                    actual_total += index_file(
-                        jsonl,
+                    count = index_file(
+                        Path(session.primary_ref),
                         db,
                         min_chars=resolved_min_chars,
-                        preparsed_exchanges=filtered,
                         project_root=root,
+                        harness=source.id,
                     )
                 except Exception as exc:  # noqa: BLE001
                     typer.echo(
-                        f"  ⚠ skip {sanitize_terminal_text(jsonl.name)}: "
+                        f"  ⚠ skip {sanitize_terminal_text(Path(session.primary_ref).name)}: "
                         f"{sanitize_terminal_text(str(exc))}",
                         err=True,
                     )
+                    continue
+                if count:
+                    files_with_new += 1
+                    actual_total += count
 
-            typer.echo(f"Indexed {actual_total} existing exchange(s).")
+        opencode_db = resolve_opencode_db_path()
+        if opencode_db is not None:
+            try:
+                count = index_opencode_db(
+                    opencode_db,
+                    db,
+                    min_chars=resolved_min_chars,
+                    project_root=root,
+                )
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(
+                    f"  ⚠ skip OpenCode sessions: {sanitize_terminal_text(str(exc))}",
+                    err=True,
+                )
+            else:
+                if count:
+                    files_with_new += 1
+                    actual_total += count
+
+        if actual_total:
+            typer.echo(
+                f"Indexed {actual_total} existing exchange(s) from "
+                f"{files_with_new} source file(s)."
+            )
+            skip_count, skip_strategy = _resolve_skip_count(
+                actual_total, skip_existing, distill_limit
+            )
+            remaining = actual_total - skip_count
+            run_distill_now = (
+                _ask_run_distill_now(remaining) if remaining > 0 else False
+            )
 
             if skip_count > 0:
                 order_clause = (
@@ -456,13 +488,24 @@ def init(
                     con.commit()
                 finally:
                     con.close()
-                remaining = actual_total - skip_count
                 typer.echo(
                     f"Marked {skip_count} exchange(s) as skipped. "
                     f"{remaining} will be distilled."
                 )
             else:
                 typer.echo(f"All {actual_total} exchange(s) will be distilled.")
+
+        chosen_client = _resolve_init_distill_client(
+            root,
+            no_local_distiller=no_local_distiller,
+            distill_client_flag=distill_client,
+        )
+        if chosen_client is not None:
+            from lociaction.adapters.model.registry import write_client_config
+
+            write_client_config(
+                config_path, chosen_client, index_min_chars=resolved_min_chars
+            )
     except KeyboardInterrupt:
         typer.echo("\n⚠ Interrupted. Cleaning up partial state...", err=True)
         _cleanup_partial_lociaction_dir(lociaction_dir, dir_preexisted)
@@ -487,6 +530,20 @@ def init(
                 f"\n⚠ Hook install failed: {sanitize_terminal_text(str(exc))}\n"
                 "Retry later with: loci hook install",
                 err=True,
+            )
+        additional_hooks = [
+            catalog.harness_id
+            for catalog in project_harnesses
+            if catalog.harness_id != "claude"
+        ]
+        if additional_hooks:
+            commands = " ".join(
+                f"`loci hook install --harness {harness}`"
+                for harness in additional_hooks
+            )
+            typer.echo(
+                "Native hooks are available but not installed for detected "
+                f"harnesses: {commands}"
             )
 
     # --- 蒸留フェーズ（失敗しても DB は残す: 後で loci distill で再試行可） ---
@@ -595,16 +652,6 @@ def _count_exchanges_by_threshold(
     return {t: sum(1 for length in lengths if length >= t) for t in thresholds}
 
 
-def _prompt_choice(valid: set[str], default: str = "1") -> str:
-    """有効な値が入力されるまで再プロンプトする"""
-    sorted_valid = sorted(valid, key=lambda s: (len(s), s))
-    while True:
-        choice = typer.prompt("Choice", default=default).strip()
-        if choice in valid:
-            return choice
-        typer.echo(f"  Invalid choice. Please enter one of: {', '.join(sorted_valid)}")
-
-
 def _prompt_int_range(prompt: str, min_v: int, max_v: int | None = None) -> int:
     """範囲制約付きの整数プロンプト。範囲外は再入力。"""
     while True:
@@ -618,51 +665,57 @@ def _prompt_int_range(prompt: str, min_v: int, max_v: int | None = None) -> int:
         return n
 
 
-def _resolve_min_chars(exchanges: list[Exchange], min_chars_flag: int | None) -> int:
-    """init 時の min_chars を決定する。フラグ指定済みならそのまま、未指定なら対話。"""
+def _resolve_min_chars(
+    exchanges: list[Exchange] | None, min_chars_flag: int | None
+) -> int:
+    """Resolve the index threshold before initial indexing.
+
+    Aggregated counts are available only for a supplied exchange list.  Setup
+    receives ``None`` so every supported harness gets the same picker before
+    any project state is written.
+    """
     if min_chars_flag is not None:
         return min_chars_flag
 
-    counts = _count_exchanges_by_threshold(exchanges, _MIN_CHARS_CANDIDATES)
+    counts = (
+        _count_exchanges_by_threshold(exchanges, _MIN_CHARS_CANDIDATES)
+        if exchanges is not None
+        else None
+    )
+    labels = [
+        (
+            f"{threshold} chars{' (default)' if threshold == 50 else ''}"
+            if counts is None
+            else f"{threshold} chars{' (default)' if threshold == 50 else ''}"
+            f" — {counts[threshold]} exchanges"
+        )
+        for threshold in _MIN_CHARS_CANDIDATES
+    ]
+    labels.append("Custom")
 
-    # exchange が0件なら対話不要
-    if counts.get(_MIN_CHARS_CANDIDATES[0], 0) == 0:
-        return _MIN_CHARS_CANDIDATES[0]
-
-    typer.echo("\nMin chars threshold for existing exchanges:")
-    for i, threshold in enumerate(_MIN_CHARS_CANDIDATES, 1):
-        label = " (default)" if threshold == 50 else ""
-        typer.echo(f"  [{i}] {threshold} chars{label} — {counts[threshold]} exchanges")
-    custom_idx = len(_MIN_CHARS_CANDIDATES) + 1
-    typer.echo(f"  [{custom_idx}] Custom")
-
-    valid = {str(i) for i in range(1, custom_idx + 1)}
-    choice = _prompt_choice(valid)
-
-    for i, threshold in enumerate(_MIN_CHARS_CANDIDATES, 1):
-        if choice == str(i):
-            return threshold
-
-    # Custom
-    return _prompt_int_range("Min chars threshold?", min_v=0)
+    idx = select_index("\nMin chars threshold for existing exchanges:", labels)
+    if idx < len(_MIN_CHARS_CANDIDATES):
+        return _MIN_CHARS_CANDIDATES[idx]
+    return _prompt_int_range("Min chars threshold?", min_v=1)
 
 
 def _ask_run_distill_now(distill_count: int) -> bool:
-    """蒸留を今すぐ実行するか聞く。y/n/1/2 を受け付ける。"""
-    typer.echo(
+    """蒸留を今すぐ実行するか聞く。非対話フォールバックは y/n も受け付ける。"""
+    message = (
         f"\nStart distillation now? ({distill_count} exchanges, "
         "uses an LLM and may consume tokens)"
     )
-    typer.echo("  [1] No — distill on next session start (default)")
-    typer.echo("  [2] Yes — run now")
-
-    while True:
-        choice = typer.prompt("Choice", default="1").strip().lower()
-        if choice in ("1", "n", "no"):
-            return False
-        if choice in ("2", "y", "yes"):
-            return True
-        typer.echo("  Invalid choice. Please enter 1/2/y/n.")
+    labels = [
+        "No — distill on next session start (default)",
+        "Yes — run now",
+    ]
+    idx = select_index(
+        message,
+        labels,
+        aliases={"y": 1, "yes": 1, "n": 0, "no": 0},
+        invalid_message="  Invalid choice. Please enter 1/2/y/n.",
+    )
+    return idx == 1
 
 
 def _resolve_init_distill_client(
@@ -713,12 +766,9 @@ def _resolve_init_distill_client(
 
 def _ask_distill_priority() -> str:
     """蒸留対象の優先順位を選択する。"""
-    typer.echo("\nDistill priority:")
-    typer.echo("  [1] Recent — newest exchanges first")
-    typer.echo("  [2] Longest — longest exchanges first")
-
-    choice = _prompt_choice({"1", "2"})
-    return "longest" if choice == "2" else "recent"
+    labels = ["Recent — newest exchanges first", "Longest — longest exchanges first"]
+    idx = select_index("\nDistill priority:", labels)
+    return "longest" if idx == 1 else "recent"
 
 
 def _resolve_skip_count(
@@ -743,22 +793,22 @@ def _resolve_skip_count(
         "and may consume tokens.\n"
         "⚠ Skipped exchanges cannot be distilled later.\n"
     )
-    typer.echo("How should existing exchanges be handled?")
-    typer.echo("  [1] Skip all — only distill future sessions")
-    typer.echo(f"  [2] Distill last {DEFAULT_DISTILL_RECENT} — recent history only")
-    typer.echo(f"  [3] Distill all — {total} exchanges (token consumption)")
-    typer.echo("  [4] Custom — specify how many exchanges to distill")
+    labels = [
+        "Skip all — only distill future sessions",
+        f"Distill last {DEFAULT_DISTILL_RECENT} — recent history only",
+        f"Distill all — {total} exchanges (token consumption)",
+        "Custom — specify how many exchanges to distill",
+    ]
+    idx = select_index("How should existing exchanges be handled?", labels)
 
-    choice = _prompt_choice({"1", "2", "3", "4"})
-
-    if choice == "1":
+    if idx == 0:
         return total, "recent"
-    if choice == "3":
+    if idx == 2:
         return 0, "recent"
 
-    if choice == "2":
+    if idx == 1:
         skip = max(0, total - DEFAULT_DISTILL_RECENT)
-    else:  # "4": Custom
+    else:  # idx == 3: Custom
         n = _prompt_int_range("How many exchanges to distill?", min_v=1, max_v=total)
         skip = max(0, total - n)
 

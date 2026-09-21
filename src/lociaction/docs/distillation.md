@@ -34,7 +34,7 @@ loci distill --setup
 loci status --check
 ```
 
-`--setup` and `init` first offer the local FT model, then only harnesses with sessions in the current project and a ready matching CLI. Selecting a harness presents the model IDs recorded in that project's local session logs plus a default-model option; it never queries a provider or claims the account can still access a historical model. The selected client and model are saved. `loci distill` without `--setup` uses that configured selection.
+`--setup` and `init` first offer the local FT model, then only harnesses with sessions in the current project and a ready matching CLI. After a harness is selected, Codex queries the selected account's live model catalog through the Codex backend. Grok, OpenCode, and Oh My Pi invoke each harness's own model-list command, so their listed IDs reflect that CLI's current resolved catalog. If live discovery fails, Lociaction explicitly shows only models recorded in this project's local session logs instead. Claude Code has no documented noninteractive availability catalog, so it currently always shows recorded model IDs plus a default-model option. The selected client and model are saved. `loci distill` without `--setup` uses that configured selection.
 
 If the configured client is not ready, lociaction does **not** silently switch. In a non-interactive run it prints the reason and skips. Reconfigure with `loci distill --setup`, or run `loci distill` in an interactive terminal.
 

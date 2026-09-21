@@ -44,7 +44,6 @@ def detected_jsonl_sources() -> tuple[JsonlLogSource, ...]:
             touch_adapter=claude_adapter,
             parent_ref_resolver=claude_adapter.parent_session_ref,
             session_path_validator=session_file_matches_project_root,
-
         ),
         JsonlLogSource(
             "codex",
@@ -52,6 +51,7 @@ def detected_jsonl_sources() -> tuple[JsonlLogSource, ...]:
             parse_codex_exchanges,
             "rollout-*.jsonl",
             touch_adapter=codex_adapter,
+            session_path_validator=codex_adapter.session_belongs_to_project,
         ),
         JsonlLogSource(
             "omp-pi",
