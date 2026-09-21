@@ -285,7 +285,17 @@ def _build_wheel(dist_dir: Path) -> Path:
 
 
 def _install_wheel(sandbox: Path, wheel: Path) -> Path:
-    """Install a built wheel into a fresh, offline runtime environment."""
+    """Install a built wheel into a fresh venv.
+
+    Deliberately *not* `--offline`: a separate `uv pip install` resolution
+    into a brand-new venv is its own dependency-resolution pass and is not
+    guaranteed to find every requirement (e.g. narrowly-pinned
+    `tree-sitter-c-sharp`) in whatever cache state an unrelated `uv sync`
+    happened to leave behind — this bit a real CI run where the outer
+    project's `uv sync --extra dev` cache did not satisfy this install.
+    Hermeticity here is about faking Claude/the embedder, not about
+    denying `uv` network access for package resolution.
+    """
     venv = sandbox / "venv"
     _run(
         ["uv", "venv", "--python", sys.executable, str(venv)],
@@ -294,7 +304,7 @@ def _install_wheel(sandbox: Path, wheel: Path) -> Path:
     )
     python = venv / "bin" / "python"
     _run(
-        ["uv", "pip", "install", "--offline", "--python", str(python), str(wheel)],
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
         cwd=sandbox,
         env=dict(os.environ),
     )

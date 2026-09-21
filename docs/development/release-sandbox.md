@@ -26,13 +26,18 @@ catching it means the tag already exists and the human release-tag approval
 cheaper. Also run it whenever a bug needs reproduction through the real
 installed command boundary.
 
-**Cache invariant**: `uv pip install --offline` succeeds only because `uv
-sync --extra dev` already populated the local `uv` cache with every wheel
-`pyproject.toml` currently declares, including narrowly-pinned ones like
-`tree-sitter-c-sharp`. Run `uv sync --extra dev` first (once per environment,
-or after any dependency change) if `make e2e` fails with a `--offline`
-resolution error — that failure means the cache is stale or a new dependency
-was added without a matching sync, not that the sandbox itself is broken.
+**Network requirement**: `_install_wheel()` installs the built wheel into
+each scenario's fresh venv with a plain `uv pip install` — no `--offline`.
+An earlier version used `--offline`, assuming the outer project's `uv sync
+--extra dev` cache would satisfy it; it doesn't reliably, because a fresh
+`uv pip install` into an unrelated venv is its own independent resolution
+pass and isn't guaranteed to find every requirement (e.g. narrowly-pinned
+`tree-sitter-c-sharp`) in whatever cache state that unrelated sync left
+behind. This broke a real `publish.yml` run on a fresh Linux CI runner even
+though the outer `uv sync --extra dev` step had already succeeded in the
+same job. `make e2e` therefore needs outbound network access for this one
+`uv pip install`; hermeticity here is about faking Claude/the embedder, not
+about denying `uv` package resolution.
 
 ## Covered journey
 
