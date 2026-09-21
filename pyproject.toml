@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lociaction"
-version = "0.6.0"
+version = "0.7.0"
 description = "Give your coding agent code-aware and semantic recall — a private, project-local memory bank"
 readme = "README.md"
 license = { text = "MIT" }

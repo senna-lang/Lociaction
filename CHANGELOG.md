@@ -2,18 +2,59 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-21
+
+### Added
+- Harness initialization parity: `loci init` indexes existing sessions from
+  every detected harness (Claude, Codex, Grok, Oh My Pi, OpenCode) under one
+  configured threshold and one history-distillation decision, instead of
+  only Claude history before the min-chars/skip-count prompts. Non-Claude
+  harnesses now get explicit `loci hook install --harness <name>` guidance
+  when detected, instead of staying silent.
+- Distill client selection derives model choices from session-recorded
+  model IDs for the detected project harness instead of a hard-coded or
+  live-provider catalog, plus distillation progress reporting.
+- `LOCI_LLAMACPP_MAX_CONCURRENT` (default 1): a machine-wide,
+  cross-process counting semaphore so multiple projects distilling with
+  `llamacpp-ft` concurrently don't each start an independent
+  full-GPU-offload `llama-server` and contend for GPU/unified memory.
+- Hermetic installed-wheel release sandbox (`make e2e`): builds the
+  current source into a wheel, installs it into a fresh offline venv, and
+  drives the installed `loci` executable through real onboarding,
+  deferred-distillation, and non-Claude hook-install flows. Wired into
+  `publish.yml` as a gate before every release-tag publish.
+
 ### Changed
 - `llamacpp-ft` always appears in `loci distill --setup` / `loci init`
   (binary missing is setupable, not hidden). Selecting it finds
   `llama-server` including `~/llama.cpp/build/bin`, runs
   `brew install llama.cpp` if needed, and `ollama pull`s the FT + draft
   models. Apple Silicon defaults to `-ngl 99`.
+- Codex project-scope filtering is unified: the same predicate now backs
+  both model-catalog discovery and `loci index --harness codex`, closing a
+  cross-project model-history leak.
+- Selecting a remote CLI distill client (`claude-cli`/`codex-cli`/
+  `gemini-cli`/`grok-cli`/`opencode-cli`/`omp-cli`) without an explicit
+  `LOCIACTION_REMOTE_DISTILL_CLIENTS` grant now warns immediately at
+  selection time, instead of only surfacing later as an unrelated,
+  confusing "distill unconfigured" warning.
 
 ### Fixed
 - `loci distill` no longer starts `llama-server` (a multi-GB model load)
   when there are 0 exchanges to distill. `distiller.has_pending_work`
   runs the same skip-marking + pending check as `distill_all` before
   binding the runtime backend.
+
+### Known issues
+- Deferring distillation with a custom count (`loci init` → "Custom" →
+  "Longest") can distill fewer exchanges than promised: the init-time
+  selection sorts candidates purely by character length, while
+  `distill_all` unconditionally re-skips single-exchange-conversation
+  candidates regardless of length or when they run. A kept "pending"
+  exchange from a single-exchange conversation is silently re-marked
+  skipped the first time `loci distill` actually runs. Documented and
+  pinned as a regression guard in
+  `tests/e2e/test_installed_cli_sandbox.py::test_installed_wheel_deferred_distill_runs_later`.
 
 ## [0.6.0] - 2026-09-15
 
