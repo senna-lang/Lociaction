@@ -489,15 +489,20 @@ def test_installed_wheel_user_skips_existing_history(
 def test_installed_wheel_user_distills_custom_recent_history_later(
     tmp_path: Path, installed_wheel: Path
 ) -> None:
-    """A user chooses a custom count, longest-first policy, and deferred run."""
+    """A user chooses a custom count, longest-first policy, and deferred run.
+
+    Only 2 of the fixture's 7 indexed exchanges are actually distillable
+    (the rest are single-exchange conversations); requesting "1" exercises
+    a genuine partial skip within that eligible pool of 2.
+    """
     sandbox = _prepare_user_sandbox(tmp_path, installed_wheel)
 
     init = _run(
         [str(sandbox.loci), "init"],
         cwd=sandbox.project,
         env=sandbox.env,
-        # threshold default → custom 2 → longest → run later → source=Claude → model=default
-        input="1\n4\n2\n2\n1\n2\n1\n",
+        # threshold default → custom 1 → longest → run later → source=Claude → model=default
+        input="1\n4\n1\n2\n1\n2\n1\n",
     )
     assert "Custom" in init.stdout
     assert "Distill priority" in init.stdout
@@ -510,8 +515,8 @@ def test_installed_wheel_user_distills_custom_recent_history_later(
             env=sandbox.env,
         ).stdout
     )
-    assert status["pending"] == 2
-    assert status["skipped"] == status["exchanges"] - 2
+    assert status["pending"] == 1
+    assert status["skipped"] == status["exchanges"] - 1
 
 
 @pytest.mark.e2e
@@ -623,16 +628,28 @@ def test_installed_wheel_deferred_distill_runs_later(
     tmp_path: Path, installed_wheel: Path
 ) -> None:
     """A user who deferred distillation runs `loci distill` afterward and it
-    actually completes the pending exchanges — not just marks them pending."""
+    actually completes exactly the promised pending exchanges.
+
+    Regression guard for a fixed init/distill selection-criteria mismatch:
+    `init`'s custom-count "longest" selection now excludes exchanges that
+    `distill_all` (distiller.py) would unconditionally re-skip anyway
+    (single-exchange conversations, or below distill.min_chars) *before*
+    applying the user's recent/longest priority — see
+    src/lociaction/cli/__init__.py's eligibility pre-filter, right after
+    "Indexed N existing exchange(s)...". Previously the "longest" sort
+    ignored that eligibility rule, so a kept-pending exchange could later be
+    silently re-skipped by `distill_all`, distilling fewer than promised.
+    """
     sandbox = _prepare_user_sandbox(tmp_path, installed_wheel)
 
     init = _run(
         [str(sandbox.loci), "init"],
         cwd=sandbox.project,
         env=sandbox.env,
-        # threshold default → custom 2 → longest → run later → source=Claude → model=default
-        input="1\n4\n2\n2\n1\n2\n1\n",
+        # threshold default → custom 1 → longest → run later → source=Claude → model=default
+        input="1\n4\n1\n2\n1\n2\n1\n",
     )
+    assert "single-exchange sessions" in init.stdout
     assert "Start distillation now?" in init.stdout
     assert "Running distillation..." not in init.stdout
 
@@ -643,24 +660,13 @@ def test_installed_wheel_deferred_distill_runs_later(
             env=sandbox.env,
         ).stdout
     )
-    assert before["pending"] == 2
+    assert before["pending"] == 1
     assert before["distilled"] == 0
 
     with _fake_embedding_server(sandbox.sock_path):
         distill = _run(
             [str(sandbox.loci), "distill"], cwd=sandbox.project, env=sandbox.env
         )
-    # Discovered discrepancy: `init`'s "longest" custom-count selection
-    # (src/lociaction/cli/__init__.py::_resolve_skip_count) sorts candidates
-    # purely by LENGTH(user_content)+LENGTH(agent_content) and has no notion
-    # of single-exchange-conversation eligibility. `distill_all`
-    # (src/lociaction/distiller.py) unconditionally re-skips any
-    # single-exchange-conversation exchange regardless of length. Kept-2 here
-    # includes the fixture's single longest exchange (a one-exchange Codex
-    # session), which `distill_all` immediately re-marks skipped — so only 1
-    # of the "2 will be distilled" `init` promised actually gets distilled.
-    # This is real observed product behavior, not a test assumption; it's a
-    # known init/distill selection-criteria mismatch worth a product decision.
     assert "Distilled 1 exchange(s)." in distill.stdout, distill.stdout + distill.stderr
 
     after = json.loads(
@@ -672,7 +678,7 @@ def test_installed_wheel_deferred_distill_runs_later(
     )
     assert after["pending"] == 0
     assert after["distilled"] == 1
-    assert after["skipped"] == before["skipped"] + 1
+    assert after["skipped"] == before["skipped"]
     assert after["palace_objects"] == 1
     assert after["symbols"] > 0, distill.stdout + distill.stderr
 

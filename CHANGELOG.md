@@ -44,17 +44,17 @@
   when there are 0 exchanges to distill. `distiller.has_pending_work`
   runs the same skip-marking + pending check as `distill_all` before
   binding the runtime backend.
-
-### Known issues
-- Deferring distillation with a custom count (`loci init` → "Custom" →
-  "Longest") can distill fewer exchanges than promised: the init-time
-  selection sorts candidates purely by character length, while
-  `distill_all` unconditionally re-skips single-exchange-conversation
-  candidates regardless of length or when they run. A kept "pending"
-  exchange from a single-exchange conversation is silently re-marked
-  skipped the first time `loci distill` actually runs. Documented and
-  pinned as a regression guard in
-  `tests/e2e/test_installed_cli_sandbox.py::test_installed_wheel_deferred_distill_runs_later`.
+- `loci init`'s history skip-count/priority selection ("Skip last N" /
+  "Custom" + "Longest"/"Recent") now excludes exchanges that
+  `distill_all` would unconditionally re-skip anyway (single-exchange
+  conversations, or shorter than `distill.min_chars`) *before* applying
+  the user's chosen count and priority. Previously the selection sorted
+  purely by character length with no notion of that eligibility rule, so
+  a user who picked "custom N" could see fewer than N actually distilled
+  once `loci distill` ran and silently re-skipped an ineligible
+  "kept-pending" exchange. `init` now also reports how many indexed
+  exchanges are permanently ineligible, before asking how to handle the
+  rest.
 
 ## [0.6.0] - 2026-09-15
 

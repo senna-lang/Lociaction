@@ -57,8 +57,12 @@ decision paths:
    confirm the real `[distill] client` and `[index] min_chars` values.
 3. **`test_installed_wheel_user_distills_custom_recent_history_later`** — a
    user picks "Custom" count, "Longest" priority, and defers distillation
-   ("No — distill on next session start"). Verifies the exact pending/skipped
-   split and that no distillation runs during `init` itself.
+   ("No — distill on next session start"). Only 2 of the fixture's 7
+   indexed exchanges are actually eligible for distillation (the rest are
+   single-exchange conversations), so requesting "1" exercises a genuine
+   partial skip with a priority choice inside that eligible pool. Verifies
+   the exact pending/skipped split and that no distillation runs during
+   `init` itself.
 4. **`test_installed_wheel_scripted_setup_via_flags_only`** — a user
    scripting CI/onboarding drives every choice through flags
    (`--no-hooks --no-local-distiller --min-chars --distill-limit
@@ -68,16 +72,18 @@ decision paths:
    same read-command surface works afterward.
 5. **`test_installed_wheel_deferred_distill_runs_later`** — proves the
    "deferred" path from scenario 3 actually completes: after `init` defers
-   distillation, a separate `loci distill` invocation is run and its result
-   is checked. This scenario **discovered a real product inconsistency**:
-   `init`'s "longest" custom-count selection sorts purely by character
-   length and has no notion of single-exchange-conversation eligibility,
-   while `distill_all` unconditionally re-skips single-exchange conversations
-   regardless of length. A user who is told "N will be distilled" can
-   therefore see fewer than N actually distilled once they run `loci
-   distill`. The test documents and asserts the current (surprising) count;
-   see the inline comment for the exact mismatch and the two source
-   locations involved if this gets reconciled.
+   distillation, a separate `loci distill` invocation is run and its
+   result is checked. This scenario **discovered and pins the fix for** a
+   real product inconsistency: `init`'s custom-count selection used to
+   sort candidates purely by character length, with no notion of
+   single-exchange-conversation eligibility, while `distill_all`
+   unconditionally re-skips single-exchange conversations regardless of
+   length — so a user told "N will be distilled" could see fewer than N
+   actually distilled. `init` now pre-filters ineligible exchanges before
+   the count/priority selection runs (see the eligibility pre-filter in
+   `src/lociaction/cli/__init__.py`, right after "Indexed N existing
+   exchange(s)..."). This test asserts the promised count and the actual
+   distilled count now match exactly.
 6. **`test_installed_wheel_hook_install_writes_non_claude_native_files`** —
    runs `loci hook install --harness codex` (merged-JSON file model, shared
    with Grok) and `--harness omp-pi` (dedicated-file model, shared with

@@ -456,44 +456,85 @@ def init(
                 f"Indexed {actual_total} existing exchange(s) from "
                 f"{files_with_new} source file(s)."
             )
-            skip_count, skip_strategy = _resolve_skip_count(
-                actual_total, skip_existing, distill_limit
-            )
-            remaining = actual_total - skip_count
-            run_distill_now = (
-                _ask_run_distill_now(remaining) if remaining > 0 else False
-            )
 
-            if skip_count > 0:
-                order_clause = (
-                    "ORDER BY LENGTH(user_content) + LENGTH(agent_content) ASC"
-                    if skip_strategy == "longest"
-                    else "ORDER BY ply_start ASC"
+            # distill_all() itself unconditionally re-skips single-exchange
+            # conversations and exchanges shorter than distill.min_chars,
+            # regardless of which ones the user asks to keep pending below.
+            # Applying that same eligibility filter here first — instead of
+            # only at actual distill time — keeps the skip-count/priority
+            # selection, and every "N will be distilled" promise, honest:
+            # a user who picks "custom N" always gets exactly N distillable
+            # exchanges kept pending, never fewer.
+            from lociaction.config import load_config
+
+            cfg = load_config(root)
+            con = get_connection(db)
+            try:
+                con.execute(
+                    """
+                    UPDATE exchanges SET distilled_at = 'skipped', distill_status = 'skipped'
+                    WHERE distilled_at IS NULL
+                    AND ((SELECT COUNT(*) FROM exchanges e2
+                          WHERE e2.conversation_id = exchanges.conversation_id) < 2
+                         OR LENGTH(user_content) + LENGTH(agent_content) < ?)
+                    """,
+                    (cfg.distill_min_chars,),
                 )
-                con = get_connection(db)
-                try:
-                    con.execute(
-                        f"""
-                        UPDATE exchanges SET distilled_at = 'skipped', distill_status = 'skipped'
-                        WHERE distilled_at IS NULL
-                        AND id IN (
-                            SELECT id FROM exchanges
-                            WHERE distilled_at IS NULL
-                            {order_clause}
-                            LIMIT ?
-                        )
-                        """,
-                        (skip_count,),
-                    )
-                    con.commit()
-                finally:
-                    con.close()
+                con.commit()
+                eligible_total = con.execute(
+                    "SELECT COUNT(*) FROM exchanges WHERE distilled_at IS NULL"
+                ).fetchone()[0]
+            finally:
+                con.close()
+            ineligible_total = actual_total - eligible_total
+            if ineligible_total:
                 typer.echo(
-                    f"Marked {skip_count} exchange(s) as skipped. "
-                    f"{remaining} will be distilled."
+                    f"{ineligible_total} of these are single-exchange sessions "
+                    f"or shorter than {cfg.distill_min_chars} chars and will "
+                    "never be distilled."
                 )
+
+            if eligible_total:
+                skip_count, skip_strategy = _resolve_skip_count(
+                    eligible_total, skip_existing, distill_limit
+                )
+                remaining = eligible_total - skip_count
+                run_distill_now = (
+                    _ask_run_distill_now(remaining) if remaining > 0 else False
+                )
+
+                if skip_count > 0:
+                    order_clause = (
+                        "ORDER BY LENGTH(user_content) + LENGTH(agent_content) ASC"
+                        if skip_strategy == "longest"
+                        else "ORDER BY ply_start ASC"
+                    )
+                    con = get_connection(db)
+                    try:
+                        con.execute(
+                            f"""
+                            UPDATE exchanges SET distilled_at = 'skipped', distill_status = 'skipped'
+                            WHERE distilled_at IS NULL
+                            AND id IN (
+                                SELECT id FROM exchanges
+                                WHERE distilled_at IS NULL
+                                {order_clause}
+                                LIMIT ?
+                            )
+                            """,
+                            (skip_count,),
+                        )
+                        con.commit()
+                    finally:
+                        con.close()
+                    typer.echo(
+                        f"Marked {skip_count} exchange(s) as skipped. "
+                        f"{remaining} will be distilled."
+                    )
+                else:
+                    typer.echo(f"All {eligible_total} exchange(s) will be distilled.")
             else:
-                typer.echo(f"All {actual_total} exchange(s) will be distilled.")
+                typer.echo("No indexed exchange qualifies for distillation yet.")
 
         chosen_client = _resolve_init_distill_client(
             root,
