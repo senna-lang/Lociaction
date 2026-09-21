@@ -209,6 +209,28 @@ export LOCIACTION_REMOTE_DISTILL_CLIENTS=omp-cli   # comma-separated for more th
 
 Set this in the shell profile the hook process actually inherits, not just an interactive terminal (GUI-launched agents on macOS often skip `~/.zshrc`/`~/.bashrc`). Interactively selecting a client during `loci init`/`loci distill --setup` still runs that same session's distillation regardless — the prompt itself is the consent; the grant only gates later, non-interactive runs. See `loci docs show distillation`.
 
+## Development
+
+Run the hermetic installed-wheel release sandbox before publication or when a
+cross-command regression needs reproduction:
+
+```bash
+make e2e
+```
+
+`make check` (lint, typecheck, `make test`) covers the unit/integration suite
+and runs in CI on every push — it does **not** run `make e2e`. A green CI does
+not mean `make e2e` has passed: `.github/workflows/publish.yml` runs it
+automatically before every release-tag publish, but run it locally first too
+— that's strictly cheaper than a tag-triggered failure — and still get the
+explicit human approval [`AGENTS.md`](AGENTS.md) requires before pushing a
+release tag.
+
+It uses synthetic history plus local fake model services and never touches your
+agent configuration or session logs. See
+[`docs/development/release-sandbox.md`](docs/development/release-sandbox.md) for
+the covered workflow and extension rules.
+
 ## Acknowledgments
 
 The palace object model, room-based topic grouping, and BM25+HNSW fusion search are based on:

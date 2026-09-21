@@ -24,7 +24,10 @@ jobs:
       - name: Type check
         run: uv run pyright src/
       - name: Test
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/ -v -m "not e2e"
+
+      - name: Release sandbox (e2e)
+        run: make e2e
 
   publish:
     needs: test

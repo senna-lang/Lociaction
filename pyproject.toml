@@ -91,6 +91,9 @@ packages = ["src/lociaction"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "e2e: hermetic installed-package workflow tests",
+]
 
 [tool.pyright]
 typeCheckingMode = "standard"
