@@ -32,7 +32,10 @@ from itertools import count
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-from lociaction.adapters.harness.lifecycle import lifecycle_commands
+from lociaction.adapters.harness.lifecycle import (
+    is_project_scoped_lifecycle_command,
+    lifecycle_commands,
+)
 from lociaction.config import DEFAULT_DISTILL_BATCH_LIMIT
 
 _CANONICAL_MATCHER = "startup|clear|resume|compact"
@@ -111,6 +114,15 @@ def _command_owned_by_loci(
         tokens = shlex.split(cmd)
     except ValueError:
         return False
+    guarded_lifecycle = (
+        is_project_scoped_lifecycle_command(cmd)
+        or (
+            cmd.startswith('__loci_root="$(git rev-parse')
+            and '"$__loci_root/.lociaction"' in cmd
+        )
+    )
+    if guarded_lifecycle:
+        return any(f"/loci {action}" in cmd for action in actions)
     executable = _invoked_executable_token(tokens)
     return (
         executable is not None
