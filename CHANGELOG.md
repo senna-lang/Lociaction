@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-22
+
+### Fixed
+- Native lifecycle hooks are now project-scoped. Although supported harnesses
+  register hooks in their user-level configuration where required, every hook
+  resolves the active Git project (or uses the cwd outside Git) and skips
+  `loci index`, `loci server start`, `loci distill`, and `loci prime` unless
+  that project has been initialized with `loci init`. Reinstalling an existing
+  Claude, Codex, Grok, Oh My Pi, or OpenCode hook migrates its generated
+  commands to the guarded form.
+
 ## [0.7.0] - 2026-09-21
 
 ### Added

@@ -286,6 +286,7 @@ def test_hook_install_omp_pi_writes_dedicated_extension_file(tmp_path, monkeypat
     assert "loci index --harness omp-pi" in content
     assert "agent_end" in content
     assert "session_start" in content
+    assert "fi; __loci_root" in content
 
     second = runner.invoke(app, ["hook", "install", "--harness", "omp-pi"])
     assert "already up to date" in second.output
@@ -321,6 +322,7 @@ def test_hook_install_opencode_writes_dedicated_plugin_file(tmp_path, monkeypatc
     assert "session.idle" in content
     assert "session.created" in content
     assert "session.compacted" in content
+    assert "fi; __loci_root" in content
 
 
 def test_hook_install_grok_uses_native_hooks_file(tmp_path, monkeypatch):
@@ -447,9 +449,7 @@ def test_hook_install_claude_command_tracks_lifecycle_commands_source(
         for entry in data["hooks"]["SessionStart"]
         for h in entry.get("hooks", [])
     ]
-    assert any(
-        cmd == "/fake/venv/bin/loci index --harness claude" for cmd in stop_commands
-    )
+    assert any("loci index --harness claude" in cmd for cmd in stop_commands)
     assert any("--limit 7" in cmd for cmd in session_commands)
 
 
@@ -475,7 +475,10 @@ def test_hook_install_prime_idempotent(tmp_path, monkeypatch):
         h for entry in data["hooks"]["SessionStart"] for h in entry.get("hooks", [])
     ]
     prime_hooks = [
-        h for h in session_start_commands if "loci prime" in h.get("command", "")
+        h
+        for h in session_start_commands
+        if "loci prime" in h.get("command", "")
+        and h["command"].startswith('__loci_root="$(git rev-parse')
     ]
     assert len(prime_hooks) == 1
 
@@ -711,15 +714,15 @@ def test_hook_install_detects_loci_hooks_under_non_canonical_matcher(
     from lociaction.hooks import install_hooks
 
     changed, _message = install_hooks(batch_limit=20)
-
-    assert changed is False  # 既に登録済みとして検知され、重複追加されない
+    assert changed is True  # 旧来の unguarded command を project-scoped に移行する
     data = json.loads(settings_path.read_text())
     session_start_entries = data["hooks"]["SessionStart"]
-    # カスタム matcher のエントリがそのまま残り、正準 matcher の新規エントリは
-    # 作られない（= 重複登録されていない）
+    # カスタム matcher はそのまま維持し、既存 command だけを guarded 版へ置換する。
     assert len(session_start_entries) == 1
     assert session_start_entries[0]["matcher"] == "startup|resume"
-    assert len(session_start_entries[0]["hooks"]) == 3
+    commands = [hook["command"] for hook in session_start_entries[0]["hooks"]]
+    assert len(commands) == 3
+    assert all(command.startswith('__loci_root="$(git rev-parse') for command in commands)
 
 
 def test_hook_uninstall_does_not_delete_unrelated_command_with_loci_substring(

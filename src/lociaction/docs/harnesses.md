@@ -30,7 +30,11 @@ loci hook install --harness opencode
 loci hook uninstall --harness NAME
 ```
 
-Install/uninstall never touches another harness's settings.
+Install/uninstall never touches another harness's settings. Native hook configuration
+is user-level where the harness requires it, but each command first resolves the
+current Git project (or uses the cwd outside Git) and runs only when that project's
+root contains `.lociaction/`. Therefore an installed hook does nothing in projects
+where `loci init` has not been run.
 
 ## What the hooks run
 
@@ -42,7 +46,9 @@ Compact handling differs:
 - Grok and OpenCode run only `loci prime` on compact.
 - Oh My Pi has no compact-equivalent event.
 
-`loci prime` prints agent instructions only in an initialized project. Without `.lociaction/` it exits silently so hooks do not pollute context.
+`loci prime` prints agent instructions only in an initialized project. Hooks also
+skip `loci index`, `loci server start`, and `loci distill` before their processes
+start when `.lociaction/` is absent.
 
 ## Indexing
 

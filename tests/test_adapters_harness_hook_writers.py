@@ -50,6 +50,43 @@ def test_merged_json_install_is_idempotent(tmp_path: Path) -> None:
     assert "up to date" in message
 
 
+
+
+def test_merged_json_install_migrates_unguarded_lifecycle_commands(
+    tmp_path: Path,
+) -> None:
+    """Codex/Grok の旧グローバル command を同一 event/action の scoped 版で置換する。"""
+    target = tmp_path / "hooks.json"
+    legacy_commands = (
+        "/old/bin/loci index --harness codex",
+        "nohup /old/bin/loci server start > /dev/null 2>&1 &",
+        "/old/bin/loci prime",
+    )
+    scoped_commands = (
+        '__loci_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; '
+        'if [ -d "$__loci_root/.lociaction" ]; then '
+        '(cd "$__loci_root" && /new/bin/loci index --harness codex); fi',
+        '__loci_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; '
+        'if [ -d "$__loci_root/.lociaction" ]; then '
+        '(cd "$__loci_root" && nohup /new/bin/loci server start > /dev/null 2>&1 &); fi',
+        '__loci_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; '
+        'if [ -d "$__loci_root/.lociaction" ]; then '
+        '(cd "$__loci_root" && /new/bin/loci prime); fi',
+    )
+    _writer(legacy_commands).install(target)
+
+    changed, _message = _writer(scoped_commands).install(target)
+
+    assert changed is True
+    commands = [
+        hook["command"]
+        for entries in json.loads(target.read_text())["hooks"].values()
+        for entry in entries
+        for hook in entry["hooks"]
+    ]
+    assert commands == list(scoped_commands)
+
+
 def test_merged_json_install_preserves_unrelated_hooks(tmp_path: Path) -> None:
     """共有ファイルの他ツール/ユーザーの hook エントリを消さない。"""
     target = tmp_path / "hooks.json"

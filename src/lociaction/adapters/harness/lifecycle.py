@@ -24,28 +24,59 @@ from lociaction.paths import loci_bin
 
 @dataclass(frozen=True)
 class LifecycleCommands:
-    """harness に依存しない、lifecycle イベントごとの loci コマンド文字列。"""
+    """harness に依存しない、初期化済みプロジェクト限定の lifecycle コマンド。"""
 
     on_turn_end: str
-    """ターン終了（Stop 相当）で実行するコマンド: `loci index --harness {harness}`"""
+    """ターン終了（Stop 相当）で実行する `loci index --harness {harness}`。"""
 
     on_session_start: tuple[str, str, str]
     """session 開始で実行する (server start, distill, prime) の3コマンド。
     server/distill は nohup で detach、prime のみ foreground（stdout をコンテキストへ注入）。"""
 
     on_compact: str
-    """compact 完了（PostCompact 相当）で実行するコマンド: `loci prime`"""
+    """compact 完了（PostCompact 相当）で実行する `loci prime`。"""
+
+
+_INITIALIZED_PROJECT_GUARD = (
+    '__loci_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; '
+    'if [ -d "$__loci_root/.lociaction" ]; then '
+)
+
+
+def is_project_scoped_lifecycle_command(command: str) -> bool:
+    """command が生成済みの initialized-project guard を含むか判定する。"""
+    return command.startswith(_INITIALIZED_PROJECT_GUARD)
+
+
+def _in_initialized_project(command: str) -> str:
+    """Git root（git 外では cwd）の `.lociaction/` に限定して command を実行する。
+
+    各 harness の hook 設定はユーザー領域に1つだけ置かれるため、導入後はすべての
+    プロジェクトでイベントを受ける。hook 本体はここで初期化済みのプロジェクトだけを
+    選び、git の subdirectory から起動した場合も `loci init` を実行した root で
+    動かす。未初期化プロジェクトでは loci の server / distill / prime / index を
+    一切起動しない。
+    """
+    return (
+        _INITIALIZED_PROJECT_GUARD
+        + f'(cd "$__loci_root" && {command}); '
+        + "fi"
+    )
 
 
 def lifecycle_commands(harness: str, batch_limit: int) -> LifecycleCommands:
-    """harness と蒸留バッチ上限から、lifecycle イベントごとの loci コマンドを組み立てる。"""
+    """harness と蒸留バッチ上限から、project-scoped な loci hook を組み立てる。"""
     loci = shlex.quote(loci_bin())
     return LifecycleCommands(
-        on_turn_end=f"{loci} index --harness {harness}",
+        on_turn_end=_in_initialized_project(f"{loci} index --harness {harness}"),
         on_session_start=(
-            f"nohup {loci} server start > /dev/null 2>&1 &",
-            f"nohup {loci} distill --limit {int(batch_limit)} > /dev/null 2>&1 &",
-            f"{loci} prime",
+            _in_initialized_project(
+                f"nohup {loci} server start > /dev/null 2>&1 &"
+            ),
+            _in_initialized_project(
+                f"nohup {loci} distill --limit {int(batch_limit)} > /dev/null 2>&1 &"
+            ),
+            _in_initialized_project(f"{loci} prime"),
         ),
-        on_compact=f"{loci} prime",
+        on_compact=_in_initialized_project(f"{loci} prime"),
     )

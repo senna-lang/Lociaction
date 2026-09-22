@@ -5,8 +5,10 @@ harness ごとに「どのイベントで何を実行するか」を再定義し
 harness を変えても on_turn_end に `--harness {harness}` だけが変わり、
 残りのコマンド構造は共有される、という契約として確認する。
 """
-
 from __future__ import annotations
+
+import subprocess
+from pathlib import Path
 
 from lociaction.adapters.harness.lifecycle import lifecycle_commands
 
@@ -26,21 +28,21 @@ def test_on_session_start_returns_server_distill_prime_in_order() -> None:
     server_cmd, distill_cmd, prime_cmd = cmds.on_session_start
 
     assert "server start" in server_cmd
-    assert server_cmd.startswith("nohup ")
-    assert server_cmd.endswith("&")
+    assert "nohup " in server_cmd
+    assert "&" in server_cmd
 
     assert "distill" in distill_cmd
     assert "--limit 42" in distill_cmd
-    assert distill_cmd.startswith("nohup ")
-    assert distill_cmd.endswith("&")
+    assert "nohup " in distill_cmd
+    assert "&" in distill_cmd
 
-    assert prime_cmd.endswith("prime")
-    assert not prime_cmd.startswith("nohup ")
+    assert prime_cmd.endswith("prime); fi")
+    assert "nohup " not in prime_cmd
 
 
-def test_on_compact_is_prime() -> None:
+def test_on_compact_is_guarded_prime() -> None:
     cmds = lifecycle_commands("claude", batch_limit=20)
-    assert cmds.on_compact.endswith("prime")
+    assert cmds.on_compact.endswith("prime); fi")
 
 
 def test_batch_limit_is_cast_to_int() -> None:
@@ -55,5 +57,33 @@ def test_different_harnesses_share_identical_session_start_shape() -> None:
         assert len(cmds.on_session_start) == 3
         server_cmd, distill_cmd, prime_cmd = cmds.on_session_start
         assert "server start" in server_cmd
+        for command in (server_cmd, distill_cmd, prime_cmd):
+            assert command.startswith('__loci_root="$(git rev-parse')
         assert "distill --limit 20" in distill_cmd
-        assert prime_cmd.endswith("prime")
+        assert prime_cmd.endswith("prime); fi")
+
+
+def test_hooks_skip_uninitialized_project_and_run_from_git_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """グローバルな harness hook でも init 済みの project 以外では loci を起動しない。"""
+    fake_loci = tmp_path / "loci"
+    log = tmp_path / "invocations"
+    fake_loci.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n")
+    fake_loci.chmod(0o755)
+    monkeypatch.setattr(
+        "lociaction.adapters.harness.lifecycle.loci_bin", lambda: str(fake_loci)
+    )
+
+    project = tmp_path / "project"
+    nested = project / "src"
+    nested.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    command = lifecycle_commands("omp-pi", batch_limit=20).on_turn_end
+
+    subprocess.run(command, shell=True, cwd=nested, check=True)
+    assert not log.exists()
+
+    (project / ".lociaction").mkdir()
+    subprocess.run(command, shell=True, cwd=nested, check=True)
+    assert log.read_text().splitlines() == ["index --harness omp-pi"]

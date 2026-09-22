@@ -169,7 +169,7 @@ def _render_omp_pi_extension(commands: LifecycleCommands) -> str:
     `agent_end`、session 開始相当は `session_start`/`session_switch`。
     compact 相当のイベントは実機で観測されていないため登録しない。
     """
-    session_start_cmd = " ".join(commands.on_session_start)
+    session_start_cmd = "; ".join(commands.on_session_start)
     header = _dedicated_file_header(
         "// Wires lociaction's lifecycle triggers into OMP's own agent/session\n"
         "// events: agent_end (turn end) -> loci index, session_start /\n"
@@ -202,7 +202,7 @@ def _render_opencode_plugin(commands: LifecycleCommands) -> str:
     （ターン終了）、`session.created` が session 開始、`session.compacted` が
     compact 完了。
     """
-    session_start_cmd = " ".join(commands.on_session_start)
+    session_start_cmd = "; ".join(commands.on_session_start)
     header = _dedicated_file_header(
         "// Wires lociaction's lifecycle triggers into OpenCode's session\n"
         "// events: session.idle (turn end) -> loci index, session.created\n"

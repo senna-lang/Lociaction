@@ -41,6 +41,13 @@ def _is_managed_command(command: str) -> bool:
     return "loci" in command and any(action in command for action in _MANAGED_ACTIONS)
 
 
+
+def _managed_action(command: str) -> str | None:
+    """lociaction 管理下の command が担う lifecycle action を返す。"""
+    if not _is_managed_command(command):
+        return None
+    return next((action for action in _MANAGED_ACTIONS if action in command), None)
+
 @dataclass(frozen=True)
 class MergedJsonEvent:
     """1つの lifecycle イベントを harness ネイティブの hook イベント + matcher に対応付ける。"""
@@ -80,7 +87,19 @@ class MergedJsonHookWriter:
                 hook.get("command") for entry in entries for hook in entry.get("hooks", [])
             }
             for command in spec.commands:
-                if command not in installed:
+                action = _managed_action(command)
+                matching = [
+                    hook
+                    for entry in entries
+                    for hook in entry.get("hooks", [])
+                    if action is not None and _managed_action(hook.get("command", "")) == action
+                ]
+                if matching:
+                    for hook in matching:
+                        if hook.get("command") != command:
+                            hook["command"] = command
+                            changed = True
+                elif command not in installed:
                     target["hooks"].append({"type": "command", "command": command})
                     changed = True
         if not changed:
