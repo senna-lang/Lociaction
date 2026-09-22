@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --reinstall-package lociaction
       - name: Lint
         run: uv run ruff check src/ tests/
       - name: Type check
